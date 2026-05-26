@@ -1,0 +1,2386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🏆 Pinacle Web OS Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    /* ── CORE DESIGN SYSTEM ────────────────────────────────────── */
+    :root {
+      --bg: #07090e;
+      --bg-panel: rgba(13, 17, 28, 0.65);
+      --card: rgba(22, 28, 45, 0.55);
+      --card-hover: rgba(32, 41, 64, 0.7);
+      --border: rgba(255, 255, 255, 0.07);
+      --border-focus: rgba(124, 106, 247, 0.4);
+      --accent: #7c6af7;
+      --accent2: #a78bfa;
+      --accent-glow: rgba(124, 106, 247, 0.3);
+      --accent-rgb: 124, 106, 247;
+      --text: #f1f5f9;
+      --muted: #64748b;
+      --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.25);
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --danger-glow: rgba(239, 68, 68, 0.25);
+      --white: #ffffff;
+      --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Outfit', system-ui, sans-serif;
+      min-height: 100vh;
+      overflow: hidden;
+      background-image:
+        radial-gradient(ellipse 70% 50% at 20% -10%, rgba(var(--accent-rgb), 0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 50% at 80% 110%, rgba(var(--accent-rgb), 0.08) 0%, transparent 60%);
+    }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(var(--accent-rgb), 0.35); border-radius: 99px; }
+
+    /* ── LAYOUT STRUCTURE ───────────────────────────────────────── */
+    .os-container {
+      display: flex;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Sidebar Navigation Dock */
+    .os-sidebar {
+      width: 85px;
+      background: rgba(10, 12, 20, 0.85);
+      backdrop-filter: blur(25px);
+      -webkit-backdrop-filter: blur(25px);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px 0;
+      gap: 12px;
+      z-index: 100;
+      flex-shrink: 0;
+    }
+
+    .os-logo {
+      font-size: 1.8rem;
+      margin-bottom: 24px;
+      cursor: pointer;
+      transition: var(--transition);
+    }
+    .os-logo:hover { transform: scale(1.15) rotate(10deg); }
+
+    .nav-btn {
+      width: 54px;
+      height: 54px;
+      border-radius: 16px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      transition: var(--transition);
+      position: relative;
+    }
+    .nav-btn span.icon { font-size: 1.45rem; }
+    .nav-btn span.label { font-size: 0.62rem; font-weight: 600; opacity: 0; transition: var(--transition); }
+    .nav-btn:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.03);
+      border-color: var(--border);
+    }
+    .nav-btn:hover span.label { opacity: 0.7; }
+    .nav-btn.active {
+      color: var(--accent2);
+      background: rgba(var(--accent-rgb), 0.15);
+      border-color: rgba(var(--accent-rgb), 0.35);
+      box-shadow: 0 0 16px var(--accent-glow);
+    }
+    .nav-btn.active span.label { opacity: 1; color: var(--accent2); }
+
+    /* Theme Engine Selector */
+    .nav-divider {
+      width: 30px;
+      height: 1px;
+      background: var(--border);
+      margin: 10px 0;
+    }
+    .theme-engine {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: auto;
+    }
+    .theme-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: var(--transition);
+    }
+    .theme-dot:hover { transform: scale(1.3); }
+    .theme-dot.active { border-color: var(--white); box-shadow: 0 0 10px currentColor; }
+    .theme-dot[data-theme="violet"] { background: #7c6af7; color: #7c6af7; }
+    .theme-dot[data-theme="emerald"] { background: #10b981; color: #10b981; }
+    .theme-dot[data-theme="sapphire"] { background: #06b6d4; color: #06b6d4; }
+    .theme-dot[data-theme="crimson"] { background: #f43f5e; color: #f43f5e; }
+    .theme-dot[data-theme="amber"] { background: #f59e0b; color: #f59e0b; }
+
+    /* Core Canvas Deck */
+    .os-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Status Header */
+    .os-header {
+      height: 70px;
+      background: rgba(8, 10, 18, 0.75);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 32px;
+      z-index: 90;
+      flex-shrink: 0;
+    }
+
+    .header-title {
+      font-size: 1.4rem;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, var(--white), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .header-title span { font-weight: 300; -webkit-text-fill-color: var(--text); }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .clock-badge {
+      background: rgba(var(--accent-rgb), 0.12);
+      border: 1px solid rgba(var(--accent-rgb), 0.25);
+      color: var(--accent2);
+      padding: 6px 16px;
+      border-radius: 99px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      font-family: var(--font-mono);
+    }
+
+    /* Screen Panels Container */
+    .os-screen {
+      flex: 1;
+      padding: 24px;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .screen-panel {
+      display: none;
+      width: 100%;
+      height: 100%;
+      animation: panelSlide 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    .screen-panel.active { display: block; }
+
+    @keyframes panelSlide {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── REUSABLE UI ELEMENTS ───────────────────────────────────── */
+    .glass-card {
+      background: var(--bg-panel);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 24px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+      transition: var(--transition);
+    }
+    .glass-card:hover { border-color: rgba(var(--accent-rgb), 0.18); }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 0.9rem;
+      cursor: pointer;
+      border: none;
+      font-family: inherit;
+      transition: var(--transition);
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      color: var(--white);
+      box-shadow: 0 4px 14px var(--accent-glow);
+    }
+    .btn-primary:hover {
+      transform: translateY(-1.5px);
+      box-shadow: 0 6px 20px rgba(var(--accent-rgb), 0.45);
+      filter: brightness(1.08);
+    }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-secondary:hover { background: rgba(255, 255, 255, 0.1); }
+    .btn-danger {
+      background: var(--danger);
+      color: var(--white);
+      box-shadow: 0 4px 14px var(--danger-glow);
+    }
+    .btn-danger:hover { transform: translateY(-1.5px); filter: brightness(1.1); }
+
+    input, textarea, select {
+      width: 100%;
+      padding: 12px 16px;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      font-size: 0.92rem;
+      font-family: inherit;
+      outline: none;
+      transition: var(--transition);
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
+    }
+    label { display: block; font-size: 0.78rem; font-weight: 700; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    /* ── SUB-APPLICATION SPECIFIC STYLES ────────────────────────── */
+
+    /* 1. 🏠 HOME VIEW */
+    .home-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 24px;
+    }
+    .widget-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+    }
+    .widget-title { font-size: 1.1rem; font-weight: 800; color: var(--accent2); display: flex; align-items: center; gap: 8px; }
+    
+    /* Quick Weather Widget */
+    .quick-weather-row { display: flex; align-items: center; gap: 16px; }
+    .quick-weather-icon { font-size: 3.2rem; }
+    .quick-weather-info .temp { font-size: 2.2rem; font-weight: 800; line-height: 1; }
+    
+    /* 2. 📅 CALENDAR STYLES (from calendar_reminder.py) */
+    .cal-wrapper {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 24px;
+      height: 100%;
+    }
+    @media (max-width: 900px) { .cal-wrapper { grid-template-columns: 1fr; } }
+    .cal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .cal-month-title { font-size: 1.35rem; font-weight: 800; color: var(--text); }
+    .days-header { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; margin-bottom: 8px; font-size: 0.8rem; font-weight: 700; color: var(--muted); }
+    .days-header .wknd { color: rgba(var(--accent-rgb), 0.7); }
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+    .cal-day {
+      background: rgba(255, 255, 255, 0.015);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      aspect-ratio: 1.25;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      position: relative;
+      transition: var(--transition);
+    }
+    .cal-day:hover { border-color: rgba(var(--accent-rgb), 0.45); transform: translateY(-1px); }
+    .cal-day.empty { background: transparent; border: none; cursor: default; pointer-events: none; }
+    .day-num { font-size: 0.95rem; font-weight: 700; }
+    .cal-day.wknd .day-num { color: rgba(var(--accent-rgb), 0.85); }
+    .cal-day.today { border-color: var(--accent); box-shadow: 0 0 10px var(--accent-glow); }
+    .cal-day.today .day-num { color: var(--accent2); }
+    .cal-day.selected { background: rgba(var(--accent-rgb), 0.18); border-color: var(--accent); }
+    .day-dots { display: flex; gap: 3px; justify-content: center; min-height: 6px; margin-top: 4px; }
+    .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent2); }
+    
+    .rem-list { overflow-y: auto; max-height: 300px; margin-bottom: 12px; }
+    .rem-item {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      transition: var(--transition);
+    }
+    .rem-item:hover { background: rgba(255, 255, 255, 0.04); }
+    .rem-item.done-item { opacity: 0.5; }
+    .rem-chk { appearance: none; -webkit-appearance: none; width: 18px; height: 18px; border: 2px solid var(--muted); border-radius: 5px; cursor: pointer; position: relative; margin-top: 2px; }
+    .rem-chk:checked { background: var(--success); border-color: var(--success); }
+    .rem-chk:checked::after { content: "✓"; position: absolute; top: -2px; left: 3px; color: #000; font-weight: 900; font-size: 0.72rem; }
+    .rem-content { flex: 1; }
+    .rem-title { font-size: 0.88rem; font-weight: 600; }
+    .done-item .rem-title { text-decoration: line-through; }
+    .rem-meta { display: flex; gap: 8px; margin-top: 4px; }
+    .rem-time { font-family: var(--font-mono); font-size: 0.7rem; color: var(--accent2); background: rgba(var(--accent-rgb), 0.1); padding: 1px 6px; border-radius: 4px; }
+    .cat-badge { font-size: 0.65rem; font-weight: 700; padding: 1px 6px; border-radius: 4px; }
+    .btn-del-mini { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.9rem; }
+    .btn-del-mini:hover { color: var(--danger); }
+    .filter-tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    .filter-tab { flex: 1; text-align: center; font-size: 0.75rem; font-weight: 700; cursor: pointer; padding: 4px; color: var(--muted); border-radius: 6px; }
+    .filter-tab.active { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+
+    /* 3. 🌤 WEATHER APPLICATION */
+    .weather-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 24px; }
+    @media (max-width: 760px) { .weather-grid { grid-template-columns: 1fr; } }
+    .weather-card-lg { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 32px; position: relative; overflow: hidden; background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.2), rgba(0, 0, 0, 0.4)); border: 1px solid rgba(var(--accent-rgb), 0.25); }
+    .forecast-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 16px; }
+    .forecast-item { text-align: center; padding: 12px; background: rgba(255,255,255,0.02); border-radius: 12px; border: 1px solid var(--border); }
+    .forecast-day { font-size: 0.75rem; color: var(--muted); font-weight: 700; }
+    .forecast-icon { font-size: 1.8rem; margin: 6px 0; }
+    .forecast-temp { font-size: 0.85rem; font-weight: 700; }
+
+    /* 4. 🛒 E-COMMERCE PYSTORE */
+    .store-layout { display: grid; grid-template-columns: 1fr 320px; gap: 24px; height: 100%; }
+    @media (max-width: 900px) { .store-layout { grid-template-columns: 1fr; } }
+    .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; overflow-y: auto; max-height: 480px; }
+    .product-card { background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; transition: var(--transition); }
+    .product-card:hover { transform: translateY(-2px); border-color: rgba(var(--accent-rgb), 0.35); }
+    .prod-cat { font-size: 0.65rem; color: var(--accent2); font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; }
+    .prod-name { font-size: 0.85rem; font-weight: 700; margin: 4px 0; min-height: 38px; }
+    .prod-desc { font-size: 0.7rem; color: var(--muted); margin-bottom: 8px; line-height: 1.3; }
+    .prod-price { font-size: 1.1rem; font-weight: 800; color: var(--warning); }
+    .cart-summary-box { background: rgba(255,255,255,0.01); border: 1px solid var(--border); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 10px; font-size: 0.85rem; }
+    .cart-summary-row { display: flex; justify-content: space-between; }
+    .invoice-view { font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.4; color: #a7f3d0; background: #064e3b; padding: 16px; border-radius: 12px; border: 1px solid #047857; margin-top: 16px; }
+
+    /* 5. 💬 LIVE CHAT APPS */
+    .chat-layout { display: grid; grid-template-columns: 180px 1fr 180px; gap: 16px; height: 420px; }
+    @media (max-width: 760px) { .chat-layout { grid-template-columns: 1fr; } }
+    .channel-list { background: rgba(0,0,0,0.2); border-radius: 16px; border: 1px solid var(--border); padding: 12px; }
+    .channel-item { padding: 8px 12px; border-radius: 8px; font-size: 0.82rem; font-weight: 600; cursor: pointer; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+    .channel-item.active { background: rgba(var(--accent-rgb), 0.15); color: var(--accent2); }
+    .chat-messages { flex: 1; background: rgba(0,0,0,0.15); border-radius: 16px; border: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+    .chat-msg { display: flex; gap: 8px; font-size: 0.82rem; }
+    .chat-avatar { width: 30px; height: 30px; border-radius: 8px; background: rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: center; font-size: 1.1rem; }
+    .chat-sender { font-weight: 700; color: var(--accent2); }
+    .chat-time { font-size: 0.65rem; color: var(--muted); margin-left: 6px; font-family: var(--font-mono); }
+    .online-users-list { background: rgba(0,0,0,0.2); border-radius: 16px; border: 1px solid var(--border); padding: 12px; font-size: 0.78rem; }
+    .user-pill { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 4px; }
+    .user-status { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+
+    /* 6. 📝 PERSONAL BLOG SITE */
+    .blog-layout { display: grid; grid-template-columns: 2.2fr 1fr; gap: 24px; }
+    @media (max-width: 760px) { .blog-layout { grid-template-columns: 1fr; } }
+    .blog-feed { overflow-y: auto; max-height: 480px; }
+    .blog-card { background: rgba(255,255,255,0.015); border: 1px solid var(--border); border-radius: 16px; padding: 20px; margin-bottom: 16px; }
+    .blog-title { font-size: 1.25rem; font-weight: 700; color: var(--text); cursor: pointer; }
+    .blog-title:hover { color: var(--accent2); }
+    .blog-meta { font-size: 0.72rem; color: var(--muted); margin: 4px 0 10px; }
+    .blog-summary { font-size: 0.88rem; line-height: 1.5; color: #cbd5e1; }
+    .blog-tag { font-size: 0.68rem; background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 12px; color: var(--muted); margin-right: 4px; border: 1px solid var(--border); }
+    .blog-post-full { animation: fadeIn 0.4s ease; }
+    .comment-pill { padding: 8px 12px; background: rgba(0,0,0,0.15); border-radius: 10px; margin-bottom: 8px; font-size: 0.8rem; }
+
+    /* 7. 🧮 CALCULATOR */
+    .calc-container { width: 300px; margin: auto; padding: 18px; border-radius: 24px; border: 1px solid var(--border); background: var(--bg-panel); display: flex; flex-direction: column; gap: 12px; }
+    .calc-display { height: 60px; text-align: right; font-size: 1.8rem; padding: 10px; background: rgba(0,0,0,0.25); border-radius: 12px; border: 1px solid var(--border); display: flex; align-items: center; justify-content: flex-end; font-family: var(--font-mono); }
+    .calc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .calc-btn { height: 48px; border-radius: 12px; border: 1px solid var(--border); background: rgba(255,255,255,0.03); color: var(--text); font-size: 1.1rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: var(--transition); }
+    .calc-btn:hover { background: rgba(255,255,255,0.07); }
+    .calc-btn.op { background: rgba(var(--accent-rgb), 0.12); color: var(--accent2); border-color: rgba(var(--accent-rgb), 0.25); }
+    .calc-btn.op:hover { background: rgba(var(--accent-rgb), 0.2); }
+    .calc-btn.eq { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--white); box-shadow: 0 4px 10px var(--accent-glow); }
+
+    /* 8. ⏱ ALARM CLOCK */
+    .alarm-container { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    @media (max-width: 600px) { .alarm-container { grid-template-columns: 1fr; } }
+    .alarm-clock-display { text-align: center; padding: 32px; font-size: 3.2rem; font-family: var(--font-mono); font-weight: 800; color: var(--accent); }
+    .alarm-list { max-height: 250px; overflow-y: auto; }
+    .alarm-pill { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 8px; }
+
+    /* 9. 📝 ONLINE QUIZ */
+    .quiz-card { max-width: 520px; margin: auto; padding: 28px; }
+    .quiz-options { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+    .quiz-opt-btn { text-align: left; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--border); background: rgba(255,255,255,0.02); color: var(--text); font-size: 0.9rem; cursor: pointer; transition: var(--transition); }
+    .quiz-opt-btn:hover { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.08); }
+    .quiz-progress-bar { height: 6px; background: rgba(255,255,255,0.06); border-radius: 99px; overflow: hidden; margin-bottom: 12px; }
+    .quiz-progress-bar-fill { height: 100%; background: var(--accent); transition: width 0.3s; }
+
+    /* ── GENERAL OVERLAYS (ALARM & TOASTS & CONFETTI) ──────────────── */
+    #confettiCanvas { position: fixed; inset: 0; pointer-events: none; z-index: 10000; }
+    .toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+    .toast { background: rgba(10,12,20,0.95); border: 1px solid var(--border); border-radius: 12px; padding: 12px 20px; font-size: 0.85rem; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); animation: toastIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; backdrop-filter: blur(10px); }
+    @keyframes toastIn { from { opacity: 0; transform: translateX(50px); } to { opacity: 1; transform: translateX(0); } }
+    .toast.success { border-color: rgba(16, 185, 129, 0.4); }
+    .toast.error { border-color: rgba(239, 68, 68, 0.4); }
+
+    .alarm-overlay { position: fixed; inset: 0; background: rgba(239,68,68,0.12); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 11000; display: none; align-items: center; justify-content: center; animation: alarmPulse 1.2s ease-in-out infinite; }
+    .alarm-overlay.ringing { display: flex; }
+    @keyframes alarmPulse { 0%, 100% { background: rgba(239,68,68,0.08); } 50% { background: rgba(239,68,68,0.22); } }
+    .alarm-box { background: rgba(15,20,32,0.95); border: 2px solid var(--danger); border-radius: 24px; width: 380px; padding: 32px; text-align: center; box-shadow: 0 0 60px rgba(239,68,68,0.4); }
+    .alarm-box-icon { font-size: 3.8rem; display: block; margin-bottom: 12px; animation: bellRing 0.4s ease infinite alternate; }
+    @keyframes bellRing { from { transform: rotate(-12deg); } to { transform: rotate(12deg); } }
+
+    /* Modal dialog overrides */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 1000; display: none; align-items: center; justify-content: center; }
+    .modal-backdrop.show { display: flex; }
+    .modal-box { width: 440px; max-width: 90vw; }
+  </style>
+</head>
+<body>
+
+  <!-- Confetti Canvas -->
+  <canvas id="confettiCanvas"></canvas>
+
+  <!-- Toast Feed -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Real-time alarm ringer popup -->
+  <div class="alarm-overlay" id="alarmOverlay">
+    <div class="alarm-box">
+      <span class="alarm-box-icon">🔔</span>
+      <h3 style="font-size: 1.4rem; color: var(--danger); margin-bottom: 6px;">⏰ SYSTEM ALARM RINGING!</h3>
+      <p id="alarmBody" style="margin-bottom: 24px; font-size: 0.95rem; font-weight: 600;"></p>
+      <button class="btn btn-danger" style="width:100%" id="btnDismissAlarm">✓ Dismiss Alarm</button>
+    </div>
+  </div>
+
+  <div class="os-container">
+    
+    <!-- ── LEFT NAVIGATION DOCK ──────────────────────────────────── -->
+    <aside class="os-sidebar">
+      <div class="os-logo" id="logoBtn" title="Back to dashboard">🏆</div>
+      
+      <button class="nav-btn active" data-target="homePanel">
+        <span class="icon">🏠</span>
+        <span class="label">Home</span>
+      </button>
+      <button class="nav-btn" data-target="calPanel">
+        <span class="icon">📅</span>
+        <span class="label">Calendar</span>
+      </button>
+      <button class="nav-btn" data-target="weatherPanel">
+        <span class="icon">🌤</span>
+        <span class="label">Weather</span>
+      </button>
+      <button class="nav-btn" data-target="storePanel">
+        <span class="icon">🛒</span>
+        <span class="label">Store</span>
+      </button>
+      <button class="nav-btn" data-target="chatPanel">
+        <span class="icon">💬</span>
+        <span class="label">Chat</span>
+      </button>
+      <button class="nav-btn" data-target="blogPanel">
+        <span class="icon">📝</span>
+        <span class="label">Blog</span>
+      </button>
+      <button class="nav-btn" data-target="calcPanel">
+        <span class="icon">🧮</span>
+        <span class="label">Calculator</span>
+      </button>
+      <button class="nav-btn" data-target="alarmPanel">
+        <span class="icon">⏰</span>
+        <span class="label">Alarms</span>
+      </button>
+      <button class="nav-btn" data-target="quizPanel">
+        <span class="icon">🎓</span>
+        <span class="label">Quizzes</span>
+      </button>
+
+      <div class="nav-divider"></div>
+      
+      <!-- Theme Dot Selectors -->
+      <div class="theme-engine">
+        <div class="theme-dot" data-theme="violet" title="Cyberpunk Violet"></div>
+        <div class="theme-dot" data-theme="emerald" title="Matrix Emerald"></div>
+        <div class="theme-dot" data-theme="sapphire" title="Ice Sapphire"></div>
+        <div class="theme-dot" data-theme="crimson" title="Hot Crimson"></div>
+        <div class="theme-dot" data-theme="amber" title="Amber Gold"></div>
+      </div>
+    </aside>
+
+    <!-- ── MAIN CONTENT WORKSPACE ───────────────────────────────── -->
+    <main class="os-main">
+      
+      <!-- STATUS HEADER -->
+      <header class="os-header">
+        <div class="header-title" id="suiteHeaderTitle">Pinacle <span>OS Suite</span></div>
+        <div class="header-right">
+          <div id="osClock" class="clock-badge">00:00:00</div>
+        </div>
+      </header>
+
+      <!-- SCREEN WORKSPACE -->
+      <section class="os-screen">
+
+        <!-- 1. HOME SCREEN (WIDGET COMPACT LIST) -->
+        <div class="screen-panel active" id="homePanel">
+          <div class="home-grid">
+            
+            <div class="glass-card" style="grid-column: span 2;">
+              <div class="widget-header">
+                <div class="widget-title">⚙️ Control Center</div>
+              </div>
+              <h2 style="font-size: 2.2rem; font-weight: 900; background: linear-gradient(135deg, var(--white), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px;">Welcome to Pinacle Web Dashboard!</h2>
+              <p style="color: var(--muted); font-size: 0.95rem; line-height: 1.5;">This dashboard merges your 9 Python applications into one beautiful glassmorphic Single Page App. Use the sidebar to explore individual tools, or interact with the quick cards below.</p>
+            </div>
+
+            <div class="glass-card">
+              <div class="widget-header">
+                <div class="widget-title">🌤 Quick Weather</div>
+                <span style="font-size: 0.8rem; cursor: pointer; color: var(--accent2);" onclick="switchTab('weatherPanel')">Open</span>
+              </div>
+              <div class="quick-weather-row" id="homeWeatherBox">
+                <div class="quick-weather-icon">🌤</div>
+                <div class="quick-weather-info">
+                  <div class="temp">25°C</div>
+                  <div style="font-size: 0.85rem; color: var(--muted);" id="homeWeatherLoc">📍 New Delhi, India</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="glass-card">
+              <div class="widget-header">
+                <div class="widget-title">📅 Reminders Tracker</div>
+                <span style="font-size: 0.8rem; cursor: pointer; color: var(--accent2);" onclick="switchTab('calPanel')">View</span>
+              </div>
+              <div id="homeRemindersList" style="font-size: 0.85rem; color: var(--muted);">
+                Fetching pending reminders...
+              </div>
+            </div>
+
+            <div class="glass-card">
+              <div class="widget-header">
+                <div class="widget-title">🛒 Cart Overview</div>
+                <span style="font-size: 0.8rem; cursor: pointer; color: var(--accent2);" onclick="switchTab('storePanel')">Shop</span>
+              </div>
+              <div style="font-size: 0.9rem; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 2rem;">🛍️</span>
+                <div>
+                  <div style="font-weight: 700; color: var(--white);" id="homeCartCount">0 Items in Cart</div>
+                  <div style="font-size: 0.75rem; color: var(--muted);" id="homeCartSubtotal">Subtotal: $0.00</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="glass-card">
+              <div class="widget-header">
+                <div class="widget-title">✍️ Latest Blog Post</div>
+                <span style="font-size: 0.8rem; cursor: pointer; color: var(--accent2);" onclick="switchTab('blogPanel')">Read</span>
+              </div>
+              <div id="homeBlogPost" style="font-size: 0.85rem;">
+                Loading recent news...
+              </div>
+            </div>
+            
+          </div>
+        </div>
+
+        <!-- 2. CALENDAR & REMINDERS SCREEN -->
+        <div class="screen-panel" id="calPanel">
+          <div class="cal-wrapper">
+            
+            <div class="glass-card">
+              <div class="cal-header">
+                <button class="btn btn-secondary" style="padding: 6px 12px;" onclick="changeMonth(-1)">◀</button>
+                <div class="cal-month-title" id="calMonthTitle">Loading Month...</div>
+                <button class="btn btn-secondary" style="padding: 6px 12px;" onclick="changeMonth(1)">▶</button>
+              </div>
+              <div class="days-header">
+                <div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div class="wknd">Sat</div><div class="wknd">Sun</div>
+              </div>
+              <div class="cal-grid" id="calGrid"></div>
+            </div>
+
+            <div class="glass-card" style="display: flex; flex-direction: column;">
+              <div class="widget-title" style="margin-bottom: 4px;">🔔 Reminders Info</div>
+              <div style="font-size: 0.78rem; color: var(--muted); margin-bottom: 12px;" id="selectedDateBadge">Select a day</div>
+
+              <div class="filter-tabs">
+                <div class="filter-tab active" id="filterAll" onclick="setFilter('all')">All</div>
+                <div class="filter-tab" id="filterPending" onclick="setFilter('pending')">Pending</div>
+                <div class="filter-tab" id="filterCompleted" onclick="setFilter('done')">Done</div>
+              </div>
+
+              <div class="rem-list" id="remList">
+                <div style="text-align: center; color: var(--muted); padding: 24px;">No date selected.</div>
+              </div>
+
+              <!-- Quick Add Reminder -->
+              <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border);">
+                <input type="text" id="addRemTitle" placeholder="Title *">
+                <div style="display: flex; gap: 6px;">
+                  <input type="time" id="addRemTime" value="09:00" style="width: 100px;">
+                  <select id="addRemCat">
+                    <option value="General">General</option>
+                    <option value="Work">Work</option>
+                    <option value="Personal">Personal</option>
+                    <option value="Health">Health</option>
+                  </select>
+                </div>
+                <button class="btn btn-primary" onclick="addReminderSubmit()">➕ Add Reminder</button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- 3. WEATHER SCREEN -->
+        <div class="screen-panel" id="weatherPanel">
+          <div style="display: flex; gap: 12px; margin-bottom: 20px;">
+            <input type="text" id="weatherCitySearch" placeholder="Search City (e.g. London, Paris, New York)" style="max-width: 320px;">
+            <button class="btn btn-primary" onclick="searchWeather()">🔍 Search</button>
+            <button class="btn btn-secondary" onclick="detectWeatherIP()">📍 Auto-detect IP</button>
+          </div>
+          <div class="weather-grid">
+            <div class="glass-card weather-card-lg">
+              <div class="prod-cat" style="font-size: 0.8rem; margin-bottom: 8px;">CURRENT CONDITIONS</div>
+              <div id="wxLargeIcon" style="font-size: 5rem;">🌤</div>
+              <h2 id="wxLargeTemp" style="font-size: 3.5rem; font-weight: 800;">--°C</h2>
+              <div id="wxLargeDesc" style="font-size: 1.1rem; font-weight: 600; margin-bottom: 4px;">Weather Loading...</div>
+              <div id="wxLargeLoc" style="color: var(--accent2); font-weight: 700;">📍 Location Loading...</div>
+              
+              <div style="display: flex; width:100%; justify-content:space-around; margin-top:24px; border-top: 1px solid var(--border); padding-top:16px; font-size:0.85rem;">
+                <div>💨 Wind: <span id="wxWind">--</span></div>
+                <div>💧 Humidity: <span id="wxHumid">--</span></div>
+                <div>🧭 Pressure: <span id="wxPress">--</span></div>
+              </div>
+            </div>
+
+            <div class="glass-card">
+              <div class="widget-title" style="margin-bottom: 12px;">📅 5-Day Forecast Summary</div>
+              <div class="forecast-row" id="forecastRow">
+                <!-- forecast items populated by js -->
+              </div>
+              <div style="margin-top: 24px; padding: 12px; border-radius: 12px; background: rgba(0,0,0,0.15); font-size: 0.82rem; color: var(--muted); line-height: 1.4;">
+                🌦 <strong>Weather Source:</strong> Powered by the free Open-Meteo & OpenStreetMap Geocoding APIs. Does not require private API keys, offering efficient geolocated forecasting.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. E-COMMERCE PYSTORE SCREEN -->
+        <div class="screen-panel" id="storePanel">
+          <div class="store-layout">
+            <div class="glass-card" style="display: flex; flex-direction: column; gap: 16px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div class="widget-title">🛍️ PyStore Catalog</div>
+                <div style="display: flex; gap: 8px;">
+                  <select id="storeCategorySelect" onchange="loadStoreProducts()" style="width: 140px; padding: 6px 12px;">
+                    <option value="all">All Items</option>
+                    <option value="Electronics">Electronics</option>
+                    <option value="Books">Books</option>
+                    <option value="Clothing">Clothing</option>
+                    <option value="Home">Home</option>
+                    <option value="Sports">Sports</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Product Grid -->
+              <div class="product-grid" id="storeProductGrid">
+                <!-- Populate items -->
+              </div>
+            </div>
+
+            <!-- Cart panel -->
+            <div class="glass-card" style="display:flex; flex-direction:column; gap:16px;">
+              <div class="widget-title">🛒 Shopping Cart</div>
+              
+              <div id="storeCartItems" style="flex:1; overflow-y:auto; max-height:220px; font-size:0.8rem;">
+                Cart is empty.
+              </div>
+
+              <div class="cart-summary-box">
+                <div class="cart-summary-row"><span>Subtotal</span><span id="cartSub">0.00</span></div>
+                <div class="cart-summary-row" id="cartDiscRow" style="display:none; color:var(--success);"><span>Discount</span><span id="cartDisc">-0.00</span></div>
+                <div class="cart-summary-row"><span>Shipping</span><span id="cartShip">0.00</span></div>
+                <div class="cart-summary-row"><span>Tax (8%)</span><span id="cartTax">0.00</span></div>
+                <div class="cart-summary-row" style="font-weight:800; border-top:1px solid var(--border); padding-top:6px; color:var(--warning);"><span>TOTAL</span><span id="cartTotal">0.00</span></div>
+              </div>
+
+              <!-- Coupon code input -->
+              <div style="display:flex; gap:6px;">
+                <input type="text" id="couponCode" placeholder="SAVE20" style="padding: 6px 10px;">
+                <button class="btn btn-secondary" style="padding: 6px 12px;" onclick="applyStoreCoupon()">Apply</button>
+              </div>
+
+              <button class="btn btn-primary" onclick="proceedToCheckout()">💳 Checkout & Buy</button>
+
+              <div id="storeReceiptBox" style="display:none;">
+                <div class="invoice-view" id="storeReceiptText">Invoice goes here</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. REAL-TIME CHAT SCREEN -->
+        <div class="screen-panel" id="chatPanel">
+          <div class="chat-layout">
+            
+            <div class="channel-list">
+              <div class="prod-cat" style="margin-bottom: 8px;">CHANNELS</div>
+              <div class="channel-item active" data-room="general" onclick="joinChatRoom('general')"># general</div>
+              <div class="channel-item" data-room="gaming" onclick="joinChatRoom('gaming')"># gaming</div>
+              <div class="channel-item" data-room="random" onclick="joinChatRoom('random')"># random</div>
+              
+              <div class="prod-cat" style="margin-top: 16px; margin-bottom: 8px;">AVATAR</div>
+              <select id="chatAvatarSelect" style="padding: 4px;" onchange="updateChatAvatar()">
+                <option value="🦊">🦊 Fox</option>
+                <option value="🐼">🐼 Panda</option>
+                <option value="🦁">🦁 Lion</option>
+                <option value="🐯">🐯 Tiger</option>
+                <option value="🦉">🦉 Owl</option>
+                <option value="🐙">🐙 Octo</option>
+              </select>
+            </div>
+
+            <div class="glass-card" style="display:flex; flex-direction:column;">
+              <div class="chat-messages" id="chatMessagesBox">
+                <!-- messages go here -->
+              </div>
+              <div style="display:flex; gap:8px; margin-top:12px;">
+                <input type="text" id="chatInputMessage" placeholder="Message channel..." onkeydown="if(event.key==='Enter') sendChatMessage()">
+                <button class="btn btn-primary" onclick="sendChatMessage()">Send 📤</button>
+              </div>
+            </div>
+
+            <div class="online-users-list">
+              <div class="prod-cat" style="margin-bottom: 8px;">ONLINE BUDDIES</div>
+              <div class="user-pill">
+                <div class="user-status"></div>
+                <span>🦊 Alice (Admin)</span>
+              </div>
+              <div class="user-pill">
+                <div class="user-status"></div>
+                <span>🐯 Bob (Gaming)</span>
+              </div>
+              <div class="user-pill">
+                <div class="user-status"></div>
+                <span>🦉 Carol (Writer)</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- 6. BLOG SCREEN -->
+        <div class="screen-panel" id="blogPanel">
+          <div class="blog-layout">
+            <div class="glass-card" style="display: flex; flex-direction: column; gap: 16px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div class="widget-title" id="blogViewHeader">📝 Personal Blog Posts</div>
+                <button class="btn btn-primary" style="padding: 6px 12px;" onclick="showNewPostForm()">➕ New Post</button>
+              </div>
+
+              <div class="blog-feed" id="blogFeed">
+                <!-- posts populated by js -->
+              </div>
+
+              <!-- Full post display -->
+              <div class="blog-post-full" id="blogPostFull" style="display:none; flex-direction:column; gap:16px;">
+                <!-- Full details populated by js -->
+              </div>
+
+              <!-- New/Edit Post Form -->
+              <div id="blogFormBox" style="display:none; flex-direction:column; gap:12px;">
+                <h3 id="blogFormTitle">Write New Article</h3>
+                <div>
+                  <label>Title *</label>
+                  <input type="text" id="blogFormPostTitle" placeholder="Awesome title...">
+                </div>
+                <div>
+                  <label>Summary</label>
+                  <input type="text" id="blogFormPostSummary" placeholder="Brief outline...">
+                </div>
+                <div>
+                  <label>Content *</label>
+                  <textarea id="blogFormPostBody" placeholder="Write article content here..." style="height: 180px;"></textarea>
+                </div>
+                <div>
+                  <label>Tags (comma-separated)</label>
+                  <input type="text" id="blogFormPostTags" placeholder="python, coding, logs">
+                </div>
+                <div style="display:flex; gap:8px;">
+                  <button class="btn btn-primary" onclick="submitPost()">Publish Post</button>
+                  <button class="btn btn-secondary" onclick="closeBlogForm()">Cancel</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tags and statistics sidebar -->
+            <div class="glass-card" style="display:flex; flex-direction:column; gap:16px; max-height: 480px;">
+              <div class="widget-title">🏷️ Topics</div>
+              <div id="blogTagsBox" style="display:flex; flex-wrap:wrap; gap:6px;">
+                <!-- tags -->
+              </div>
+
+              <div class="widget-title" style="margin-top: 12px;">⚙️ Admin Controls</div>
+              <button class="btn btn-secondary" style="width: 100%;" onclick="loadBlogAdminPosts()">Manage Posts (Table)</button>
+              <div id="blogAdminTableBox" style="display:none; overflow-x:auto; font-size:0.75rem; border-top: 1px solid var(--border); padding-top:12px; margin-top:10px;">
+                <!-- Admin table -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 7. NEUMORPHIC CALCULATOR SCREEN -->
+        <div class="screen-panel" id="calcPanel">
+          <div style="display: flex; gap: 24px; max-width: 580px; margin: auto;">
+            
+            <div class="calc-container">
+              <div class="calc-display" id="calcDisplay">0</div>
+              <div class="calc-grid">
+                <button class="calc-btn op" onclick="pressCalcKey('C')">C</button>
+                <button class="calc-btn op" onclick="pressCalcKey('√')">√</button>
+                <button class="calc-btn op" onclick="pressCalcKey('%')">%</button>
+                <button class="calc-btn op" onclick="pressCalcKey('/')">/</button>
+
+                <button class="calc-btn" onclick="pressCalcKey('7')">7</button>
+                <button class="calc-btn" onclick="pressCalcKey('8')">8</button>
+                <button class="calc-btn" onclick="pressCalcKey('9')">9</button>
+                <button class="calc-btn op" onclick="pressCalcKey('*')">*</button>
+
+                <button class="calc-btn" onclick="pressCalcKey('4')">4</button>
+                <button class="calc-btn" onclick="pressCalcKey('5')">5</button>
+                <button class="calc-btn" onclick="pressCalcKey('6')">6</button>
+                <button class="calc-btn op" onclick="pressCalcKey('-')">-</button>
+
+                <button class="calc-btn" onclick="pressCalcKey('1')">1</button>
+                <button class="calc-btn" onclick="pressCalcKey('2')">2</button>
+                <button class="calc-btn" onclick="pressCalcKey('3')">3</button>
+                <button class="calc-btn op" onclick="pressCalcKey('+')">+</button>
+
+                <button class="calc-btn" onclick="pressCalcKey('0')">0</button>
+                <button class="calc-btn" onclick="pressCalcKey('.')">.</button>
+                <button class="calc-btn" onclick="pressCalcKey('**')">**</button>
+                <button class="calc-btn eq" onclick="pressCalcKey('=')">=</button>
+              </div>
+            </div>
+
+            <div class="glass-card" style="flex:1;">
+              <div class="widget-title" style="margin-bottom: 12px;">📋 Calculator History</div>
+              <div id="calcHistoryBox" style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); max-height: 220px; overflow-y: auto;">
+                No calculation logs.
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- 8. ALARM CLOCK SCREEN -->
+        <div class="screen-panel" id="alarmPanel">
+          <div class="alarm-container">
+            <div class="glass-card" style="display:flex; flex-direction:column; align-items:center; justify-content:center;">
+              <div class="alarm-clock-display" id="alarmClockDisplay">00:00:00</div>
+              <div style="font-size: 1rem; color: var(--muted); margin-bottom: 24px;" id="alarmDateDisplay">Wednesday, 27 May 2026</div>
+
+              <div style="width: 100%; display: flex; flex-direction: column; gap: 8px;">
+                <h4 style="font-size: 0.85rem; color: var(--accent2);">Set New Alarm Time</h4>
+                <div style="display:flex; gap:8px;">
+                  <input type="number" id="alarmHour" placeholder="HH" min="0" max="23" style="width: 70px;">
+                  <input type="number" id="alarmMin" placeholder="MM" min="0" max="59" style="width: 70px;">
+                  <input type="text" id="alarmLabel" placeholder="Label (e.g. Wake up!)">
+                </div>
+                <button class="btn btn-primary" onclick="addNewAlarmSubmit()">➕ Schedule Alarm</button>
+              </div>
+            </div>
+
+            <div class="glass-card">
+              <div class="widget-title" style="margin-bottom: 12px;">🔔 Scheduled Alarms</div>
+              <div class="alarm-list" id="alarmList">
+                <div style="color: var(--muted); text-align: center; padding: 24px;">No alarms active.</div>
+              </div>
+              <div style="font-size: 0.72rem; color: var(--muted); line-height: 1.4; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px;">
+                🔊 <strong>Sound synthesis:</strong> Built using clean Web Audio oscillators. Rings actively inside the web dashboard directly, ensuring reliable background reminders.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 9. ONLINE QUIZ SCREEN -->
+        <div class="screen-panel" id="quizPanel">
+          <!-- Quiz list view -->
+          <div class="glass-card" id="quizListViewBox">
+            <div class="widget-header">
+              <div class="widget-title">🎓 Available Quizzes</div>
+              <button class="btn btn-primary" style="padding: 6px 12px;" onclick="showQuizCreatorForm()">🛠 Create Custom Quiz</button>
+            </div>
+            <div id="quizzesBox" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:16px;">
+              <!-- POPULATED BY JS -->
+            </div>
+
+            <h3 style="margin-top: 24px; margin-bottom: 12px; font-size: 1rem; border-top: 1px solid var(--border); padding-top: 16px;">🏆 Platform Leaderboard</h3>
+            <div id="quizLeaderboard" style="font-size: 0.8rem; overflow-x:auto;">
+              No records submitted yet. Take a quiz to appear on the leaderboard!
+            </div>
+          </div>
+
+          <!-- Play view -->
+          <div class="glass-card quiz-card" id="quizPlayViewBox" style="display:none;">
+            <div class="quiz-progress-bar">
+              <div class="quiz-progress-bar-fill" id="quizBarFill" style="width: 0%"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
+              <span id="quizQIndex" style="font-size: 0.85rem; color: var(--accent2); font-weight:700;">Question 1</span>
+              <span id="quizTimer" style="font-family: var(--font-mono); color: var(--warning); font-weight:700;">⏱ --:--</span>
+            </div>
+            <h3 id="quizQuestionText" style="font-size:1.25rem; font-weight:800; margin-bottom:16px;">What defines a Python function?</h3>
+            <div class="quiz-options" id="quizOptionsBox">
+              <!-- populate buttons -->
+            </div>
+            <div id="quizExplanation" style="display:none; padding:12px; border-radius:10px; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.3); font-size:0.8rem; margin-top:12px;"></div>
+          </div>
+
+          <!-- Quiz result screen -->
+          <div class="glass-card quiz-card" id="quizResultViewBox" style="display:none; text-align:center;">
+            <span style="font-size: 3.5rem;">🎉</span>
+            <h2 style="font-size:1.8rem; font-weight:900; margin-bottom:8px;">Quiz Completed!</h2>
+            <div style="font-size: 2.5rem; font-weight: 900; color: var(--accent2); margin: 16px 0;" id="quizResultGrade">Grade: A+</div>
+            <p id="quizResultStats" style="font-size: 0.95rem; color: var(--muted); margin-bottom: 24px;"></p>
+            <button class="btn btn-primary" onclick="showQuizList()">← Go Back to Quiz Hall</button>
+          </div>
+
+          <!-- Quiz creator Form -->
+          <div class="glass-card" id="quizCreatorFormBox" style="display:none; max-width: 600px; margin: auto;">
+            <h3 style="margin-bottom:16px;">Create Custom Quiz</h3>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+              <div>
+                <label>Quiz Title *</label>
+                <input type="text" id="customQuizTitle" placeholder="e.g. JavaScript Basics">
+              </div>
+              <div>
+                <label>Description</label>
+                <input type="text" id="customQuizDesc" placeholder="e.g. Test basic JS skills">
+              </div>
+              <div>
+                <label>Category</label>
+                <input type="text" id="customQuizCat" placeholder="e.g. Web Development">
+              </div>
+              <div>
+                <label>Time Limit (seconds)</label>
+                <input type="number" id="customQuizTime" value="60">
+              </div>
+              
+              <div style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 10px;">
+                <h4 style="font-size:0.85rem; color:var(--accent2); margin-bottom:8px;">Questions (Add up to 3)</h4>
+                <div style="background: rgba(0,0,0,0.15); padding: 12px; border-radius: 12px; border: 1px solid var(--border);">
+                  <label>Question 1 Text *</label>
+                  <input type="text" id="cqText" placeholder="e.g. What is 2 + 2?">
+                  <label style="margin-top:6px;">Options (Comma-separated) *</label>
+                  <input type="text" id="cqOptions" placeholder="3, 4, 5, 6">
+                  <label style="margin-top:6px;">Correct Answer Index (0-3) *</label>
+                  <input type="number" id="cqAnsIndex" value="1" min="0" max="3">
+                </div>
+              </div>
+
+              <div style="display:flex; gap:8px; margin-top:12px;">
+                <button class="btn btn-primary" onclick="submitCustomQuiz()">Create Quiz ✨</button>
+                <button class="btn btn-secondary" onclick="showQuizList()">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+    </main>
+  </div>
+
+  <script>
+    'use strict';
+
+    /* ── DYNAMIC THEME SYSTEM ─────────────────────────────────── */
+    const THEMES = {
+      violet:   { accent: '#7c6af7', accent2: '#a78bfa', rgb: '124,106,247' },
+      emerald:  { accent: '#10b981', accent2: '#34d399', rgb: '16,185,129' },
+      sapphire: { accent: '#06b6d4', accent2: '#67e8f9', rgb: '6,182,212' },
+      crimson:  { accent: '#f43f5e', accent2: '#fb7185', rgb: '244,63,94' },
+      amber:    { accent: '#f59e0b', accent2: '#fcd34d', rgb: '245,158,11' }
+    };
+
+    function applyTheme(name) {
+      const t = THEMES[name] || THEMES.violet;
+      const root = document.documentElement;
+      root.style.setProperty('--accent', t.accent);
+      root.style.setProperty('--accent2', t.accent2);
+      root.style.setProperty('--accent-glow', `rgba(${t.rgb}, 0.3)`);
+      root.style.setProperty('--accent-rgb', t.rgb);
+      document.querySelectorAll('.theme-dot').forEach(dot => {
+        dot.classList.toggle('active', dot.dataset.theme === name);
+      });
+      localStorage.setItem('pinacle-theme', name);
+    }
+
+    document.querySelectorAll('.theme-dot').forEach(dot => {
+      dot.addEventListener('click', () => applyTheme(dot.dataset.theme));
+    });
+
+    /* ── AUDIO SYNTHESIZER ────────────────────────────────────── */
+    let audioCtx = null;
+
+    function beep(freq = 800, dur = 0.1, type = 'sine') {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + dur);
+      } catch (e) {}
+    }
+
+    function playSuccessChime() {
+      beep(523.25, 0.1);
+      setTimeout(() => beep(659.25, 0.1), 80);
+      setTimeout(() => beep(783.99, 0.12), 160);
+    }
+
+    function playErrorChime() {
+      beep(220, 0.15, 'sawtooth');
+      setTimeout(() => beep(180, 0.2, 'sawtooth'), 150);
+    }
+
+    /* ── CONFETTI BURST (Canvas Particle Engine) ────────────────── */
+    const canvas = document.getElementById('confettiCanvas');
+    const ctx2d = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    window.addEventListener('resize', () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    });
+
+    let particles = [];
+    let confettiRunning = false;
+
+    function launchConfetti(x, y) {
+      const colors = ['#7c6af7', '#10b981', '#f59e0b', '#f43f5e', '#06b6d4'];
+      for (let i = 0; i < 60; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 3 + Math.random() * 8;
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed - 3,
+          size: 4 + Math.random() * 6,
+          color: colors[Math.floor(Math.random() * colors.length)],
+          life: 1,
+          decay: 0.01 + Math.random() * 0.015,
+          rot: Math.random() * 360,
+          rotV: (Math.random() - 0.5) * 6
+        });
+      }
+      if (!confettiRunning) runConfetti();
+    }
+
+    function runConfetti() {
+      confettiRunning = true;
+      ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+      particles = particles.filter(p => p.life > 0);
+      particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.2; // gravity
+        p.life -= p.decay;
+        p.rot += p.rotV;
+        ctx2d.globalAlpha = Math.max(0, p.life);
+        ctx2d.fillStyle = p.color;
+        ctx2d.save();
+        ctx2d.translate(p.x, p.y);
+        ctx2d.rotate(p.rot * Math.PI / 180);
+        ctx2d.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+        ctx2d.restore();
+      });
+      ctx2d.globalAlpha = 1;
+      if (particles.length > 0) {
+        requestAnimationFrame(runConfetti);
+      } else {
+        confettiRunning = false;
+      }
+    }
+
+    /* ── OS STATUS BAR CLOCK ──────────────────────────────────── */
+    function updateClock() {
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString();
+      document.getElementById('osClock').textContent = timeStr;
+      
+      // Update Alarm Clock panel screen too
+      const alarmDisplay = document.getElementById('alarmClockDisplay');
+      if (alarmDisplay) {
+        alarmDisplay.textContent = timeStr;
+        document.getElementById('alarmDateDisplay').textContent = now.toLocaleDateString(undefined, {
+          weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+        });
+      }
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    /* ── SPA DOCK ROUTER ──────────────────────────────────────── */
+    function switchTab(targetId) {
+      beep(600, 0.04);
+      document.querySelectorAll('.screen-panel').forEach(panel => {
+        panel.classList.remove('active');
+      });
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        btn.classList.remove('active');
+      });
+      document.getElementById(targetId).classList.add('active');
+      
+      const navBtn = document.querySelector(`.nav-btn[data-target="${targetId}"]`);
+      if (navBtn) navBtn.classList.add('active');
+
+      // Hook up specific module loaders on screen focus
+      if (targetId === 'calPanel') loadCalendar();
+      if (targetId === 'weatherPanel') fetchWeatherStatus();
+      if (targetId === 'storePanel') loadStoreProducts();
+      if (targetId === 'chatPanel') joinChatRoom('general');
+      if (targetId === 'blogPanel') loadBlogFeed();
+      if (targetId === 'calcPanel') fetchCalculatorHistory();
+      if (targetId === 'alarmPanel') fetchAlarms();
+      if (targetId === 'quizPanel') showQuizList();
+    }
+
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        switchTab(btn.dataset.target);
+      });
+    });
+
+    document.getElementById('logoBtn').addEventListener('click', () => {
+      switchTab('homePanel');
+      loadHomeDashboard();
+    });
+
+    /* ── TOAST MESSENGER ─────────────────────────────────────── */
+    function showToast(msg, type = 'success') {
+      const feed = document.getElementById('toastContainer');
+      const box = document.createElement('div');
+      box.className = `toast ${type}`;
+      box.innerHTML = `<span>${type === 'success' ? '✓' : '✗'}</span> ${msg}`;
+      feed.appendChild(box);
+      setTimeout(() => box.remove(), 3500);
+    }
+
+    /* ── 1. HOME SCREEN LOADER ────────────────────────────────── */
+    function loadHomeDashboard() {
+      // 1. Fetch pending reminders summary
+      fetch('/api/stats')
+        .then(r => r.json())
+        .then(stats => {
+          document.getElementById('homeRemindersList').innerHTML = `
+            <div style="font-weight:700; color:var(--white); font-size:1rem; margin-bottom:4px;">${stats.pending} Tasks Pending</div>
+            <div style="display:flex; justify-content:space-between;">
+              <span>Done: ${stats.done}</span>
+              <span>Total: ${stats.total}</span>
+            </div>
+          `;
+        });
+
+      // 2. Load recent blog post overview
+      fetch('/api/blog/posts')
+        .then(r => r.json())
+        .then(posts => {
+          if (posts && posts.length > 0) {
+            const p = posts[0];
+            document.getElementById('homeBlogPost').innerHTML = `
+              <div style="font-weight:700; color:var(--white); cursor:pointer;" onclick="switchTab('blogPanel')">${p.title}</div>
+              <div style="color:var(--muted); font-size:0.75rem; margin-top:2px;">📅 ${p.created_at.substring(0, 10)}</div>
+            `;
+          } else {
+            document.getElementById('homeBlogPost').textContent = 'No blog articles published yet.';
+          }
+        });
+
+      // 3. Update active Cart Count
+      fetch('/api/store/cart')
+        .then(r => r.json())
+        .then(cart => {
+          document.getElementById('homeCartCount').textContent = `${cart.item_count} Items in Cart`;
+          document.getElementById('homeCartSubtotal').textContent = `Subtotal: $${cart.subtotal.toFixed(2)}`;
+        });
+    }
+
+    /* ── 2. CALENDAR REMINDERS MODULE ────────────────────────── */
+    let calYear, calMonth, selectedDate = null;
+    let reminderDates = [];
+    let calendarRemindersList = [];
+    let calendarFilter = 'all';
+
+    function loadCalendar() {
+      const now = new Date();
+      if (!calYear) calYear = now.getFullYear();
+      if (!calMonth) calMonth = now.getMonth() + 1;
+      if (!selectedDate) {
+        selectedDate = `${calYear}-${String(calMonth).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        document.getElementById('selectedDateBadge').textContent = `📆 ${selectedDate}`;
+      }
+
+      fetch(`/api/calendar?year=${calYear}&month=${calMonth}`)
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById('calMonthTitle').textContent = `${data.month_name} ${data.year}`;
+          reminderDates = data.reminder_dates;
+          renderGrid(data.days);
+        });
+      
+      loadSelectedDateReminders();
+    }
+
+    function renderGrid(days) {
+      const grid = document.getElementById('calGrid');
+      grid.innerHTML = '';
+      const td = new Date().toISOString().substring(0, 10);
+      days.forEach(week => {
+        week.forEach(day => {
+          const cell = document.createElement('div');
+          if (day === 0) {
+            cell.className = 'cal-day empty';
+          } else {
+            const hasRem = reminderDates.includes(day);
+            const isToday = (day === td);
+            const isSel = (day === selectedDate);
+            
+            cell.className = 'cal-day' + (isToday ? ' today' : '') + (isSel ? ' selected' : '');
+            cell.innerHTML = `
+              <div class="day-num">${parseInt(day.split('-')[2])}</div>
+              <div class="day-dots">${hasRem ? '<div class="dot"></div>' : ''}</div>
+            `;
+            cell.addEventListener('click', () => {
+              selectedDate = day;
+              document.getElementById('selectedDateBadge').textContent = `📆 ${selectedDate}`;
+              loadCalendar();
+            });
+          }
+          grid.appendChild(cell);
+        });
+      });
+    }
+
+    function changeMonth(dir) {
+      calMonth += dir;
+      if (calMonth < 1) { calMonth = 12; calYear--; }
+      if (calMonth > 12) { calMonth = 1; calYear++; }
+      loadCalendar();
+    }
+
+    function loadSelectedDateReminders() {
+      if (!selectedDate) return;
+      fetch(`/api/reminders?date=${selectedDate}`)
+        .then(r => r.json())
+        .then(data => {
+          calendarRemindersList = data;
+          renderRemindersList();
+        });
+    }
+
+    function setFilter(filter) {
+      calendarFilter = filter;
+      document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+      if (filter === 'all') document.getElementById('filterAll').classList.add('active');
+      if (filter === 'pending') document.getElementById('filterPending').classList.add('active');
+      if (filter === 'done') document.getElementById('filterCompleted').classList.add('active');
+      renderRemindersList();
+    }
+
+    function renderRemindersList() {
+      const box = document.getElementById('remList');
+      box.innerHTML = '';
+      
+      let filtered = calendarRemindersList.filter(r => {
+        if (calendarFilter === 'pending' && r.done) return false;
+        if (calendarFilter === 'done' && !r.done) return false;
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        box.innerHTML = `<div style="text-align:center; padding:24px; color:var(--muted)">No reminders for this day.</div>`;
+        return;
+      }
+
+      filtered.forEach(rem => {
+        const item = document.createElement('div');
+        item.className = `rem-item ${rem.done ? 'done-item' : ''}`;
+        item.innerHTML = `
+          <input type="checkbox" class="rem-chk" ${rem.done ? 'checked disabled' : ''}>
+          <div class="rem-content">
+            <div class="rem-title">${rem.title}</div>
+            <div class="rem-meta">
+              ${rem.time ? `<span class="rem-time">⏰ ${rem.time}</span>` : ''}
+              <span class="cat-badge" style="background: rgba(var(--accent-rgb), 0.15); color: var(--accent2);">${rem.category || 'General'}</span>
+            </div>
+          </div>
+          <button class="btn-del-mini" onclick="deleteReminder(${rem.id})">🗑</button>
+        `;
+        
+        item.querySelector('.rem-chk').addEventListener('change', (e) => {
+          const rect = e.target.getBoundingClientRect();
+          markReminderDone(rem.id, rect.left, rect.top);
+        });
+
+        box.appendChild(item);
+      });
+    }
+
+    function markReminderDone(id, x, y) {
+      fetch(`/api/reminders/${id}/done`, { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+          if (d.success) {
+            launchConfetti(x, y);
+            playSuccessChime();
+            showToast('Reminder completed! 🎉');
+            loadCalendar();
+          }
+        });
+    }
+
+    function deleteReminder(id) {
+      if (!confirm('Delete this reminder?')) return;
+      fetch(`/api/reminders/${id}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(d => {
+          if (d.success) {
+            showToast('Reminder deleted.', 'error');
+            playErrorChime();
+            loadCalendar();
+          }
+        });
+    }
+
+    function addReminderSubmit() {
+      const title = document.getElementById('addRemTitle').value.trim();
+      const time = document.getElementById('addRemTime').value;
+      const category = document.getElementById('addRemCat').value;
+
+      if (!title) {
+        showToast('Please enter a reminder title.', 'error');
+        playErrorChime();
+        return;
+      }
+
+      fetch('/api/reminders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: selectedDate, title, note: '', time, category })
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          showToast('Reminder added! 🔔');
+          playSuccessChime();
+          document.getElementById('addRemTitle').value = '';
+          loadCalendar();
+        }
+      });
+    }
+
+    /* ── 3. WEATHER MODULE ───────────────────────────────────── */
+    function fetchWeatherStatus() {
+      // Auto Geolocate weather
+      detectWeatherIP();
+    }
+
+    function renderWeatherData(data) {
+      document.getElementById('wxLargeIcon').textContent = data.current.emoji;
+      document.getElementById('wxLargeTemp').textContent = `${data.current.temp}${data.current.unit_sym}`;
+      document.getElementById('wxLargeDesc').textContent = data.current.description;
+      document.getElementById('wxLargeLoc').textContent = `📍 ${data.current.city}, ${data.current.country}`;
+      document.getElementById('wxWind').textContent = `${data.current.wind_speed} ${data.current.wind_unit}`;
+      document.getElementById('wxHumid').textContent = `${data.current.humidity}%`;
+      document.getElementById('wxPress').textContent = `${data.current.pressure} hPa`;
+
+      // Update widget on home
+      const hwIcon = document.querySelector('#homeWeatherBox .quick-weather-icon');
+      if (hwIcon) hwIcon.textContent = data.current.emoji;
+      const hwTemp = document.querySelector('#homeWeatherBox .temp');
+      if (hwTemp) hwTemp.textContent = `${data.current.temp}${data.current.unit_sym}`;
+      const hwLoc = document.getElementById('homeWeatherLoc');
+      if (hwLoc) hwLoc.textContent = `📍 ${data.current.city}`;
+
+      // Forecast Render
+      const row = document.getElementById('forecastRow');
+      row.innerHTML = '';
+      if (data.forecast && data.forecast.length > 0) {
+        data.forecast.forEach(f => {
+          const cell = document.createElement('div');
+          cell.className = 'forecast-item';
+          cell.innerHTML = `
+            <div class="forecast-day">${f.date}</div>
+            <div class="forecast-icon">${f.emoji}</div>
+            <div class="forecast-temp">${f.temp_max}° / ${f.temp_min}°</div>
+          `;
+          row.appendChild(cell);
+        });
+      }
+    }
+
+    function searchWeather() {
+      const city = document.getElementById('weatherCitySearch').value.trim();
+      if (!city) return;
+      showToast(`Searching weather for '${city}'...`);
+      fetch(`/api/weather/fetch?city=${city}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) {
+            showToast(data.error, 'error');
+            playErrorChime();
+          } else {
+            renderWeatherData(data);
+          }
+        });
+    }
+
+    function detectWeatherIP() {
+      fetch('/api/weather/fetch')
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) {
+            showToast(data.error, 'error');
+          } else {
+            renderWeatherData(data);
+          }
+        });
+    }
+
+    /* ── 4. E-COMMERCE SHOP COMPONENT ─────────────────────────── */
+    let storeCart = {};
+
+    function loadStoreProducts() {
+      const cat = document.getElementById('storeCategorySelect').value;
+      fetch('/api/store/products')
+        .then(r => r.json())
+        .then(prods => {
+          const grid = document.getElementById('storeProductGrid');
+          grid.innerHTML = '';
+          
+          let filtered = prods.filter(p => {
+            if (cat !== 'all' && p.category !== cat) return false;
+            return true;
+          });
+
+          filtered.forEach(p => {
+            const card = document.createElement('div');
+            card.className = 'product-card';
+            card.innerHTML = `
+              <div>
+                <div class="prod-cat">${p.category}</div>
+                <div class="prod-name">${p.name}</div>
+                <div class="prod-desc">${p.description}</div>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px;">
+                <span class="prod-price">$${p.price.toFixed(2)}</span>
+                <button class="btn btn-primary" style="padding: 6px 12px; font-size:0.8rem;" onclick="addStoreItemToCart(${p.id})">🛒 Add</button>
+              </div>
+            `;
+            grid.appendChild(card);
+          });
+        });
+      
+      updateStoreCartDisplay();
+    }
+
+    function addStoreItemToCart(pid) {
+      fetch('/api/store/cart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_id: pid, qty: 1 })
+      })
+      .then(r => r.json())
+      .then(d => {
+        showToast(d.message);
+        playSuccessChime();
+        updateStoreCartDisplay();
+      });
+    }
+
+    function updateStoreCartDisplay() {
+      fetch('/api/store/cart')
+        .then(r => r.json())
+        .then(cart => {
+          const box = document.getElementById('storeCartItems');
+          box.innerHTML = '';
+          
+          if (cart.items.length === 0) {
+            box.innerHTML = `<div style="text-align:center; padding:16px; color:var(--muted)">Cart is empty.</div>`;
+          } else {
+            cart.items.forEach(item => {
+              const row = document.createElement('div');
+              row.style = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;';
+              row.innerHTML = `
+                <div>
+                  <div style="font-weight:700;">${item.product.name}</div>
+                  <div style="color:var(--muted); font-size:0.75rem;">$${item.product.price.toFixed(2)} x ${item.quantity}</div>
+                </div>
+                <button class="btn-del-mini" onclick="removeStoreCartItem(${item.product.id})">🗑</button>
+              `;
+              box.appendChild(row);
+            });
+          }
+
+          document.getElementById('cartSub').textContent = `$${cart.subtotal.toFixed(2)}`;
+          document.getElementById('cartShip').textContent = `$${cart.shipping.toFixed(2)}`;
+          document.getElementById('cartTax').textContent = `$${cart.tax.toFixed(2)}`;
+          document.getElementById('cartTotal').textContent = `$${cart.total.toFixed(2)}`;
+
+          if (cart.discount_amount > 0) {
+            document.getElementById('cartDiscRow').style.display = 'flex';
+            document.getElementById('cartDisc').textContent = `-$${cart.discount_amount.toFixed(2)}`;
+          } else {
+            document.getElementById('cartDiscRow').style.display = 'none';
+          }
+        });
+    }
+
+    function removeStoreCartItem(pid) {
+      fetch('/api/store/cart', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_id: pid })
+      })
+      .then(r => r.json())
+      .then(d => {
+        showToast(d.message, 'error');
+        playErrorChime();
+        updateStoreCartDisplay();
+      });
+    }
+
+    function applyStoreCoupon() {
+      const code = document.getElementById('couponCode').value.trim();
+      if (!code) return;
+      fetch('/api/store/coupon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          showToast(d.message);
+          playSuccessChime();
+        } else {
+          showToast(d.message, 'error');
+          playErrorChime();
+        }
+        updateStoreCartDisplay();
+      });
+    }
+
+    function proceedToCheckout() {
+      const card = prompt('Enter Test Card Number (4242 4242 4242 4242 for approval, 4242 4242 4242 0000 for decline):');
+      if (!card) return;
+      
+      showToast('Processing secure transaction...');
+      fetch('/api/store/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          card_number: card,
+          card_holder: 'Demo Customer',
+          expiry: '12/28',
+          cvv: '123',
+          billing_zip: '10001'
+        })
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          showToast('Payment Approved! 🧾');
+          playSuccessChime();
+          launchConfetti(window.innerWidth/2, window.innerHeight/2);
+          
+          document.getElementById('storeReceiptBox').style.display = 'block';
+          document.getElementById('storeReceiptText').textContent = d.receipt;
+          updateStoreCartDisplay();
+        } else {
+          showToast(d.message, 'error');
+          playErrorChime();
+        }
+      });
+    }
+
+    /* ── 5. REAL-TIME CHAT ENGINE ───────────────────────────── */
+    let currentChatRoom = 'general';
+    let chatUserAvatar = '🦊';
+
+    function joinChatRoom(room) {
+      currentChatRoom = room;
+      document.querySelectorAll('.channel-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.room === room);
+      });
+
+      fetch(`/api/chat/messages?room=${room}`)
+        .then(r => r.json())
+        .then(messages => {
+          const box = document.getElementById('chatMessagesBox');
+          box.innerHTML = '';
+          messages.forEach(m => {
+            renderChatMessage(m);
+          });
+          scrollChatToBottom();
+        });
+    }
+
+    function updateChatAvatar() {
+      chatUserAvatar = document.getElementById('chatAvatarSelect').value;
+      showToast(`Avatar updated to ${chatUserAvatar}`);
+      beep(600, 0.05);
+    }
+
+    function renderChatMessage(m) {
+      const box = document.getElementById('chatMessagesBox');
+      const div = document.createElement('div');
+      div.className = 'chat-msg';
+      div.innerHTML = `
+        <div class="chat-avatar">${m.avatar || '🦊'}</div>
+        <div>
+          <div>
+            <span class="chat-sender">${m.user}</span>
+            <span class="chat-time">${m.ts || '00:00:00'}</span>
+          </div>
+          <div style="margin-top:2px;">${m.msg}</div>
+        </div>
+      `;
+      box.appendChild(div);
+    }
+
+    function sendChatMessage() {
+      const input = document.getElementById('chatInputMessage');
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      fetch('/api/chat/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room: currentChatRoom,
+          user: 'Guest',
+          avatar: chatUserAvatar,
+          msg
+        })
+      })
+      .then(r => r.json())
+      .then(messages => {
+        input.value = '';
+        beep(750, 0.05);
+        
+        // Refresh
+        const box = document.getElementById('chatMessagesBox');
+        box.innerHTML = '';
+        messages.forEach(m => renderChatMessage(m));
+        scrollChatToBottom();
+      });
+    }
+
+    function scrollChatToBottom() {
+      const box = document.getElementById('chatMessagesBox');
+      box.scrollTop = box.scrollHeight;
+    }
+
+    /* ── 6. PERSONAL BLOG LOGIC ────────────────────────────── */
+    function loadBlogFeed() {
+      // Hide post display / form
+      document.getElementById('blogPostFull').style.display = 'none';
+      document.getElementById('blogFormBox').style.display = 'none';
+      document.getElementById('blogFeed').style.display = 'block';
+      document.getElementById('blogAdminTableBox').style.display = 'none';
+
+      fetch('/api/blog/posts')
+        .then(r => r.json())
+        .then(posts => {
+          const feed = document.getElementById('blogFeed');
+          feed.innerHTML = '';
+          if (posts.length === 0) {
+            feed.innerHTML = '<p style="color:var(--muted)">No articles published yet.</p>';
+          } else {
+            posts.forEach(p => {
+              const tagsHtml = p.tags ? p.tags.split(',').map(t => `<span class="blog-tag">#${t.trim()}</span>`).join(' ') : '';
+              const card = document.createElement('div');
+              card.className = 'blog-card';
+              card.innerHTML = `
+                <div class="blog-title" onclick="loadBlogPostFull('${p.slug}')">${p.title}</div>
+                <div class="blog-meta">📅 Published ${p.created_at.substring(0,10)}</div>
+                <p class="blog-summary">${p.summary || ''}</p>
+                <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
+                  <div>${tagsHtml}</div>
+                  <button class="btn btn-secondary" style="padding:4px 10px; font-size:0.75rem;" onclick="loadBlogPostFull('${p.slug}')">Read Post →</button>
+                </div>
+              `;
+              feed.appendChild(card);
+            });
+          }
+        });
+      
+      loadBlogTagsList();
+    }
+
+    function loadBlogTagsList() {
+      fetch('/api/blog/posts')
+        .then(r => r.json())
+        .then(posts => {
+          const box = document.getElementById('blogTagsBox');
+          box.innerHTML = '';
+          const tags = new Set();
+          posts.forEach(p => {
+            if (p.tags) {
+              p.tags.split(',').forEach(t => tags.add(t.trim()));
+            }
+          });
+
+          if (tags.size === 0) {
+            box.innerHTML = '<span style="color:var(--muted)">None</span>';
+          } else {
+            tags.forEach(t => {
+              const span = document.createElement('span');
+              span.className = 'blog-tag';
+              span.style.cursor = 'pointer';
+              span.textContent = `#${t}`;
+              box.appendChild(span);
+            });
+          }
+        });
+    }
+
+    function loadBlogPostFull(slug) {
+      document.getElementById('blogFeed').style.display = 'none';
+      document.getElementById('blogPostFull').style.display = 'flex';
+      
+      fetch(`/api/blog/posts/${slug}`)
+        .then(r => r.json())
+        .then(data => {
+          const p = data.post;
+          const comments = data.comments;
+
+          let commentsHtml = '';
+          comments.forEach(c => {
+            commentsHtml += `
+              <div class="comment-pill">
+                <strong>👤 ${c.author}</strong> <span style="font-size:0.68rem; color:var(--muted)">${c.created_at.substring(11,16)}</span>
+                <p style="margin-top:4px;">${c.content}</p>
+              </div>
+            `;
+          });
+
+          document.getElementById('blogPostFull').innerHTML = `
+            <h2 style="font-size:1.8rem; font-weight:800;">${p.title}</h2>
+            <div class="blog-meta">📅 Date: ${p.created_at.substring(0,10)} | Slug: ${p.slug}</div>
+            <div style="line-height:1.6; font-size:0.95rem; border-top:1px solid var(--border); padding-top:12px; white-space: pre-wrap;">${p.body}</div>
+            
+            <div style="display:flex; gap:8px; margin-top:20px;">
+              <button class="btn btn-secondary" onclick="loadBlogFeed()">← Back Feed</button>
+              <button class="btn btn-danger" style="padding:6px 12px; font-size:0.8rem;" onclick="deleteBlogPost('${p.slug}')">🗑 Delete</button>
+            </div>
+
+            <div style="margin-top:24px; border-top: 1px solid var(--border); padding-top:16px;">
+              <h3>💬 Comments (${comments.length})</h3>
+              <div style="margin-top:12px;">${commentsHtml || '<p style="color:var(--muted)">No comments yet.</p>'}</div>
+              
+              <div style="margin-top:16px; display:flex; flex-direction:column; gap:8px;">
+                <h4>Leave a Comment</h4>
+                <input type="text" id="newCommentAuthor" placeholder="Name">
+                <textarea id="newCommentContent" placeholder="Write comment..." style="height:60px;"></textarea>
+                <button class="btn btn-primary" style="align-self:flex-end;" onclick="submitComment('${p.slug}')">Post Comment</button>
+              </div>
+            </div>
+          `;
+        });
+    }
+
+    function showNewPostForm() {
+      document.getElementById('blogFeed').style.display = 'none';
+      document.getElementById('blogPostFull').style.display = 'none';
+      document.getElementById('blogFormBox').style.display = 'flex';
+    }
+
+    function closeBlogForm() {
+      document.getElementById('blogFormBox').style.display = 'none';
+      loadBlogFeed();
+    }
+
+    function submitPost() {
+      const title = document.getElementById('blogFormPostTitle').value.trim();
+      const summary = document.getElementById('blogFormPostSummary').value.trim();
+      const body = document.getElementById('blogFormPostBody').value.trim();
+      const tags = document.getElementById('blogFormPostTags').value.trim();
+
+      if (!title || !body) {
+        showToast('Title and Body are required.', 'error');
+        playErrorChime();
+        return;
+      }
+
+      fetch('/api/blog/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, summary, body, tags, published: 1 })
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          showToast('Blog post published! ✏️');
+          playSuccessChime();
+          // Reset
+          document.getElementById('blogFormPostTitle').value = '';
+          document.getElementById('blogFormPostSummary').value = '';
+          document.getElementById('blogFormPostBody').value = '';
+          document.getElementById('blogFormPostTags').value = '';
+          closeBlogForm();
+        }
+      });
+    }
+
+    function submitComment(slug) {
+      const author = document.getElementById('newCommentAuthor').value.trim();
+      const content = document.getElementById('newCommentContent').value.trim();
+
+      if (!author || !content) {
+        showToast('All fields required.', 'error');
+        playErrorChime();
+        return;
+      }
+
+      fetch(`/api/blog/posts/${slug}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ author, content })
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          showToast('Comment added! 💬');
+          playSuccessChime();
+          loadBlogPostFull(slug);
+        }
+      });
+    }
+
+    function deleteBlogPost(slug) {
+      if (!confirm('Are you sure you want to delete this blog post?')) return;
+      fetch(`/api/blog/posts/${slug}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(d => {
+          if (d.success) {
+            showToast('Post deleted.', 'error');
+            playErrorChime();
+            loadBlogFeed();
+          }
+        });
+    }
+
+    function loadBlogAdminPosts() {
+      const tableBox = document.getElementById('blogAdminTableBox');
+      if (tableBox.style.display === 'block') {
+        tableBox.style.display = 'none';
+        return;
+      }
+
+      fetch('/api/blog/admin/posts')
+        .then(r => r.json())
+        .then(posts => {
+          tableBox.style.display = 'block';
+          let rows = '';
+          posts.forEach(p => {
+            rows += `
+              <tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:6px;">${p.title}</td>
+                <td style="padding:6px; color:var(--muted);">${p.created_at.substring(0,10)}</td>
+                <td style="padding:6px;"><button class="btn btn-danger" style="padding:2px 6px; font-size:0.7rem;" onclick="deleteBlogPost('${p.slug}')">🗑</button></td>
+              </tr>
+            `;
+          });
+
+          tableBox.innerHTML = `
+            <table style="width:100%; border-collapse:collapse;">
+              <thead>
+                <tr style="color:var(--accent2); font-weight:700; text-align:left;">
+                  <th style="padding:6px;">Title</th><th style="padding:6px;">Date</th><th style="padding:6px;">Del</th>
+                </tr>
+              </thead>
+              <tbody>${rows || '<tr><td colspan="3">No articles</td></tr>'}</tbody>
+            </table>
+          `;
+        });
+    }
+
+    /* ── 7. NEUMORPHIC CALCULATOR COMPONENT ──────────────────── */
+    let calcExpression = '';
+
+    function pressCalcKey(key) {
+      beep(700, 0.05);
+      const display = document.getElementById('calcDisplay');
+      
+      if (key === 'C') {
+        calcExpression = '';
+        display.textContent = '0';
+      } else if (key === '=') {
+        if (!calcExpression) return;
+        
+        fetch('/api/calculator/history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expression: calcExpression })
+        })
+        .then(r => r.json())
+        .then(d => {
+          if (d.success) {
+            display.textContent = d.result;
+            calcExpression = String(d.result);
+            fetchCalculatorHistory();
+          } else {
+            display.textContent = 'Error';
+            playErrorChime();
+            calcExpression = '';
+          }
+        });
+      } else if (key === '√') {
+        calcExpression = 'math.sqrt(' + calcExpression + ')';
+        display.textContent = '√(' + display.textContent + ')';
+      } else {
+        calcExpression += key;
+        display.textContent = calcExpression;
+      }
+    }
+
+    function fetchCalculatorHistory() {
+      fetch('/api/calculator/history')
+        .then(r => r.json())
+        .then(history => {
+          const box = document.getElementById('calcHistoryBox');
+          box.innerHTML = '';
+          if (history.length === 0) {
+            box.innerHTML = '<div>No calculation logs.</div>';
+          } else {
+            history.forEach(h => {
+              const div = document.createElement('div');
+              div.style = 'margin-bottom:6px; display:flex; justify-content:space-between;';
+              div.innerHTML = `<span>${h}</span>`;
+              box.appendChild(div);
+            });
+          }
+        });
+    }
+
+    /* ── 8. ALARM CLOCK APP MODULE ───────────────────────────── */
+    function fetchAlarms() {
+      fetch('/api/alarms')
+        .then(r => r.json())
+        .then(alarms => {
+          const list = document.getElementById('alarmList');
+          list.innerHTML = '';
+          if (alarms.length === 0) {
+            list.innerHTML = '<div style="color:var(--muted); text-align:center; padding:24px;">No alarms active.</div>';
+          } else {
+            alarms.forEach(a => {
+              const row = document.createElement('div');
+              row.className = 'alarm-pill';
+              row.innerHTML = `
+                <div>
+                  <div style="font-size:1.15rem; font-weight:700; color:var(--white);">${String(a.hour).padStart(2,'0')}:${String(a.minute).padStart(2,'0')}</div>
+                  <div style="font-size:0.75rem; color:var(--muted);">${a.label}</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <button class="btn btn-secondary" style="padding:4px 8px; font-size:0.7rem;" onclick="toggleAlarm(${a.id})">${a.active ? '🟢 ON' : '⚫ OFF'}</button>
+                  <button class="btn-del-mini" onclick="deleteAlarm(${a.id})">🗑</button>
+                </div>
+              `;
+              list.appendChild(row);
+            });
+          }
+        });
+    }
+
+    function addNewAlarmSubmit() {
+      const hour = parseInt(document.getElementById('alarmHour').value);
+      const minute = parseInt(document.getElementById('alarmMin').value);
+      const label = document.getElementById('alarmLabel').value.trim() || 'Wake up!';
+
+      if (isNaN(hour) || isNaN(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        showToast('Enter valid HH (0-23) and MM (0-59)', 'error');
+        playErrorChime();
+        return;
+      }
+
+      fetch('/api/alarms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hour, minute, label })
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          showToast('Alarm scheduled successfully! ⏰');
+          playSuccessChime();
+          document.getElementById('alarmHour').value = '';
+          document.getElementById('alarmMin').value = '';
+          document.getElementById('alarmLabel').value = '';
+          fetchAlarms();
+        }
+      });
+    }
+
+    function toggleAlarm(id) {
+      fetch(`/api/alarms/${id}/toggle`, { method: 'POST' })
+        .then(r => r.json())
+        .then(() => fetchAlarms());
+    }
+
+    function deleteAlarm(id) {
+      fetch(`/api/alarms/${id}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(() => fetchAlarms());
+    }
+
+    /* ── Alarm notification system chimer ── */
+    let activeAlarmInterval = null;
+    function startAlarmOverlayWatcher() {
+      setInterval(() => {
+        fetch('/api/poll')
+          .then(r => r.json())
+          .then(rings => {
+            if (rings.length > 0) {
+              const alarm = rings[0];
+              document.getElementById('alarmBody').innerHTML = `<strong>${alarm.label}</strong><br>Scheduled for ${String(alarm.hour).padStart(2,'0')}:${String(alarm.minute).padStart(2,'0')}`;
+              document.getElementById('alarmOverlay').classList.add('ringing');
+              
+              // Trigger chimes
+              clearInterval(activeAlarmInterval);
+              beep(880, 0.4, 'sawtooth');
+              activeAlarmInterval = setInterval(() => {
+                beep(880, 0.3, 'sawtooth');
+              }, 1200);
+            }
+          });
+      }, 5000);
+    }
+
+    document.getElementById('btnDismissAlarm').addEventListener('click', () => {
+      document.getElementById('alarmOverlay').classList.remove('ringing');
+      clearInterval(activeAlarmInterval);
+      showToast('Alarm dismissed.');
+      beep(600, 0.1);
+    });
+
+    /* ── 9. QUIZ CONSOLE COMPONENT ───────────────────────────── */
+    let currentQuiz = null;
+    let quizQuestions = [];
+    let quizQuestionIndex = 0;
+    let quizScore = 0;
+    let quizTimeLimit = 0;
+    let quizTimerInterval = null;
+
+    function showQuizList() {
+      document.getElementById('quizListViewBox').style.display = 'block';
+      document.getElementById('quizPlayViewBox').style.display = 'none';
+      document.getElementById('quizResultViewBox').style.display = 'none';
+      document.getElementById('quizCreatorFormBox').style.display = 'none';
+      clearInterval(quizTimerInterval);
+
+      fetch('/api/quiz/list')
+        .then(r => r.json())
+        .then(quizzes => {
+          const box = document.getElementById('quizzesBox');
+          box.innerHTML = '';
+          quizzes.forEach(q => {
+            const card = document.createElement('div');
+            card.className = 'product-card';
+            card.innerHTML = `
+              <div>
+                <div class="prod-cat">${q.category}</div>
+                <div class="prod-name" style="min-height:auto;">${q.title}</div>
+                <div style="font-size:0.75rem; color:var(--muted); margin-bottom:12px;">${q.description}</div>
+              </div>
+              <button class="btn btn-primary" onclick="startQuizPlay(${q.id})">🎮 Start Test</button>
+            `;
+            box.appendChild(card);
+          });
+        });
+      
+      loadQuizLeaderboard();
+    }
+
+    function loadQuizLeaderboard() {
+      fetch('/api/quiz/leaderboard')
+        .then(r => r.json())
+        .then(board => {
+          const lBox = document.getElementById('quizLeaderboard');
+          if (board.length === 0) {
+            lBox.innerHTML = '<div style="color:var(--muted)">No leaderboard submissions. Be the first!</div>';
+            return;
+          }
+
+          let rows = '';
+          board.forEach((b, idx) => {
+            rows += `
+              <tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:6px;">${idx+1}</td>
+                <td style="padding:6px; font-weight:700;">${b.user}</td>
+                <td style="padding:6px; color:var(--accent2);">${b.quiz}</td>
+                <td style="padding:6px; color:var(--warning); font-family:var(--font-mono);">${b.score}/${b.total}</td>
+                <td style="padding:6px; font-weight:700; color:var(--success);">${b.grade}</td>
+              </tr>
+            `;
+          });
+
+          lBox.innerHTML = `
+            <table style="width:100%; border-collapse:collapse; text-align:left;">
+              <thead>
+                <tr style="color:var(--muted); font-size:0.72rem; text-transform:uppercase;">
+                  <th style="padding:6px;">Rank</th><th style="padding:6px;">User</th><th style="padding:6px;">Quiz</th><th style="padding:6px;">Score</th><th style="padding:6px;">Grade</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          `;
+        });
+    }
+
+    function startQuizPlay(qid) {
+      fetch(`/api/quiz/list`)
+        .then(r => r.json())
+        .then(quizzes => {
+          currentQuiz = quizzes.find(q => q.id === qid);
+          quizQuestions = currentQuiz.questions;
+          quizQuestionIndex = 0;
+          quizScore = 0;
+          quizTimeLimit = currentQuiz.time_limit || 60;
+          
+          document.getElementById('quizListViewBox').style.display = 'none';
+          document.getElementById('quizPlayViewBox').style.display = 'block';
+          
+          loadQuizQuestion();
+          startQuizCountdown();
+        });
+    }
+
+    function loadQuizQuestion() {
+      if (quizQuestionIndex >= quizQuestions.length) {
+        finishQuiz();
+        return;
+      }
+
+      const q = quizQuestions[quizQuestionIndex];
+      document.getElementById('quizQIndex').textContent = `Question ${quizQuestionIndex + 1} of ${quizQuestions.length}`;
+      document.getElementById('quizQuestionText').textContent = q.text;
+      
+      const pct = (quizQuestionIndex / quizQuestions.length) * 100;
+      document.getElementById('quizBarFill').style.width = `${pct}%`;
+
+      const optionsBox = document.getElementById('quizOptionsBox');
+      optionsBox.innerHTML = '';
+      q.options.forEach((opt, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'quiz-opt-btn';
+        btn.textContent = `${idx + 1}. ${opt}`;
+        btn.onclick = () => submitQuizAnswer(idx);
+        optionsBox.appendChild(btn);
+      });
+
+      document.getElementById('quizExplanation').style.display = 'none';
+    }
+
+    function submitQuizAnswer(ansIdx) {
+      const q = quizQuestions[quizQuestionIndex];
+      const isCorrect = (ansIdx === q.answer_index);
+      
+      // Highlight selection and block buttons
+      document.querySelectorAll('.quiz-opt-btn').forEach((btn, idx) => {
+        btn.disabled = true;
+        if (idx === q.answer_index) {
+          btn.style.borderColor = 'var(--success)';
+          btn.style.background = 'rgba(16,185,129,0.15)';
+        } else if (idx === ansIdx) {
+          btn.style.borderColor = 'var(--danger)';
+          btn.style.background = 'rgba(239,68,68,0.15)';
+        }
+      });
+
+      if (isCorrect) {
+        quizScore += q.points;
+        playSuccessChime();
+        showToast('Correct! 🎉');
+      } else {
+        playErrorChime();
+        showToast('Wrong! ✗', 'error');
+      }
+
+      if (q.explanation) {
+        const expBox = document.getElementById('quizExplanation');
+        expBox.innerHTML = `<strong>💡 Explanation:</strong> ${q.explanation}`;
+        expBox.style.display = 'block';
+      }
+
+      setTimeout(() => {
+        quizQuestionIndex++;
+        loadQuizQuestion();
+      }, 2500);
+    }
+
+    function startQuizCountdown() {
+      clearInterval(quizTimerInterval);
+      updateQuizTimerText();
+      
+      quizTimerInterval = setInterval(() => {
+        quizTimeLimit--;
+        updateQuizTimerText();
+        if (quizTimeLimit <= 0) {
+          clearInterval(quizTimerInterval);
+          finishQuiz();
+        }
+      }, 1000);
+    }
+
+    function updateQuizTimerText() {
+      const m = Math.floor(quizTimeLimit / 60);
+      const s = quizTimeLimit % 60;
+      document.getElementById('quizTimer').textContent = `⏱ ${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+    }
+
+    function finishQuiz() {
+      clearInterval(quizTimerInterval);
+      document.getElementById('quizPlayViewBox').style.display = 'none';
+      document.getElementById('quizResultViewBox').style.display = 'block';
+
+      const username = prompt('Enter your name for leaderboard entry:') || 'Player';
+      
+      // Calculate grade
+      const totalPoints = currentQuiz.questions.reduce((sum, q) => sum + q.points, 0);
+      const pct = totalPoints > 0 ? (quizScore / totalPoints) * 100 : 0;
+      let grade = 'F';
+      if (pct >= 90) grade = 'A+';
+      else if (pct >= 80) grade = 'A';
+      else if (pct >= 70) grade = 'B';
+      else if (pct >= 60) grade = 'C';
+      else if (pct >= 50) grade = 'D';
+
+      document.getElementById('quizResultGrade').textContent = `Grade: ${grade}`;
+      document.getElementById('quizResultStats').textContent = `Score: ${quizScore}/${totalPoints} (${Math.round(pct)}%)`;
+
+      fetch('/api/quiz/take', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          quiz_title: currentQuiz.title,
+          username,
+          score: quizScore,
+          total_points: totalPoints,
+          correct: quizQuestions.filter((q, idx) => q.points > 0).length, // simple calculation
+          total_q: quizQuestions.length,
+          time_taken: 60 - quizTimeLimit,
+          grade
+        })
+      });
+      
+      launchConfetti(window.innerWidth/2, window.innerHeight/2);
+      playSuccessChime();
+    }
+
+    function showQuizCreatorForm() {
+      document.getElementById('quizListViewBox').style.display = 'none';
+      document.getElementById('quizCreatorFormBox').style.display = 'block';
+    }
+
+    function submitCustomQuiz() {
+      const title = document.getElementById('customQuizTitle').value.trim();
+      const description = document.getElementById('customQuizDesc').value.trim() || 'Custom Quiz';
+      const category = document.getElementById('customQuizCat').value.trim() || 'General';
+      const time_limit = parseInt(document.getElementById('customQuizTime').value) || 60;
+      
+      const qText = document.getElementById('cqText').value.trim();
+      const qOptsRaw = document.getElementById('cqOptions').value.trim();
+      const qAnsIdx = parseInt(document.getElementById('cqAnsIndex').value) || 0;
+
+      if (!title || !qText || !qOptsRaw) {
+        showToast('Title, question, and options are required.', 'error');
+        playErrorChime();
+        return;
+      }
+
+      const questions = [{
+        id: 101,
+        text: qText,
+        options: qOptsRaw.split(',').map(o => o.trim()),
+        answer_index: qAnsIdx,
+        category,
+        difficulty: 'Medium',
+        points: 10,
+        explanation: 'Custom built question.'
+      }];
+
+      fetch('/api/quiz/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, description, category, time_limit, questions })
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          showToast('Custom Quiz scheduled successfully! 🎓');
+          playSuccessChime();
+          showQuizList();
+        }
+      });
+    }
+
+    /* ── WINDOW DOM READY INITIALIZATION ────────────────────── */
+    window.addEventListener('DOMContentLoaded', () => {
+      // 1. Theme initialization
+      applyTheme(localStorage.getItem('pinacle-theme') || 'violet');
+
+      // 2. Load Control Center parameters
+      loadHomeDashboard();
+      
+      // 3. Start background alarm checker polling
+      startAlarmOverlayWatcher();
+    });
+  </script>
+</body>
+</html>
