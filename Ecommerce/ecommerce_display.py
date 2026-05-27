@@ -1,6 +1,6 @@
 """
-🛒 PyStore - E-Commerce Storefront
-Premium Flask Web UI for shopping gallery + original Rich terminal CLI
+🛒 PyStore - Premium E-Commerce Storefront (Amazon-Inspired)
+Flask Web UI with modern design, product filters, wishlist & secure checkout
 
 Usage:
     python ecommerce_display.py          # Launch web UI on port 5006
@@ -26,8 +26,9 @@ from payment import PaymentDetails, process_payment, generate_receipt
 app = Flask(__name__)
 app.secret_key = "pystore-ecommerce-premium-secret-2026"
 
-# Session-based shopping carts
+# Session-based shopping carts & wishlists
 CARTS = {}
+WISHLISTS = {}
 
 def get_cart():
     if 'session_id' not in session:
@@ -36,6 +37,14 @@ def get_cart():
     if session_id not in CARTS:
         CARTS[session_id] = ShoppingCart()
     return CARTS[session_id]
+
+def get_wishlist():
+    if 'session_id' not in session:
+        session['session_id'] = uuid.uuid4().hex
+    session_id = session['session_id']
+    if session_id not in WISHLISTS:
+        WISHLISTS[session_id] = set()
+    return WISHLISTS[session_id]
 
 # ── HTML Template ──────────────────────────────────────────────
 HTML_TEMPLATE = r"""

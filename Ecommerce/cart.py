@@ -122,6 +122,7 @@ class ShoppingCart:
             "after_discount":  self.after_discount(),
             "shipping":        self.shipping(),
             "tax":             self.tax(),
+            "tax_percent":     int(self.TAX_RATE * 100),
             "total":           self.total(),
             "item_count":      self.item_count(),
             "coupon_code":     self.coupon_code,
