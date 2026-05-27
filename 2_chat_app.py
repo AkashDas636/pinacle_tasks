@@ -20,16 +20,49 @@ import time
 import random
 import hashlib
 import webbrowser
+import queue
 from collections import defaultdict
 
+# Force UTF-8 encoding on standard output/error on Windows
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 # ── Flask import ──────────────────────────────────────────────
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, Response, session, make_response, redirect
 
 
 # ── Shared helpers ────────────────────────────────────────────
 
 def timestamp():
     return datetime.datetime.now().strftime("%H:%M:%S")
+
+
+# ── Real-Time Streaming & Unification State ───────────────────
+sse_listeners = []
+sse_lock = threading.Lock()
+active_server_instance = None
+global_users = {}
+chat_rooms = {}
+chat_lock = threading.Lock()
+
+def broadcast_sse(event_type: str, data: dict):
+    payload = json.dumps({"event": event_type, "data": data})
+    with sse_lock:
+        for q in list(sse_listeners):
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                pass
+
+def broadcast_to_sockets(room_name: str, ptype: str, **kwargs):
+    global active_server_instance
+    if active_server_instance:
+        active_server_instance._broadcast_room(room_name, ptype, **kwargs)
 
 
 def make_packet(ptype, **kwargs):
@@ -58,6 +91,9 @@ class UserProfile:
         self.pw_hash   = hashlib.sha256(password.encode()).hexdigest() if password else ""
         self.status    = "online"
         self.msg_count = 0
+        self.custom_status = ""
+        self.mute      = False
+        self.deafen    = False
 
     def verify(self, password: str) -> bool:
         return self.pw_hash == hashlib.sha256(password.encode()).hexdigest()
@@ -69,6 +105,7 @@ class UserProfile:
             "joined_at": self.joined_at.strftime("%Y-%m-%d %H:%M"),
             "status":    self.status,
             "msg_count": self.msg_count,
+            "custom_status": getattr(self, "custom_status", ""),
         }
 
     def __str__(self):
@@ -83,14 +120,37 @@ class ChatRoom:
         self.owner      = owner
         self.is_private = is_private
         self.members    = {owner}
-        self.history    = []          # list of (ts, user, msg)
+        self.history    = []          # list of dicts: {"id", "ts", "user", "msg", "avatar", "reactions"}
         self.created_at = datetime.datetime.now()
+        self.type       = "text"      # "text", "voice", or "dm"
+        self.voice_members = set()
 
-    def add_message(self, username: str, message: str):
-        entry = (timestamp(), username, message)
+    def add_message(self, username: str, message: str, msg_id: str = None):
+        avatar = "🐼"
+        if username in global_users:
+            avatar = global_users[username].avatar
+        
+        entry = {
+            "id": msg_id or hashlib.md5(f"{username}-{timestamp()}-{random.random()}".encode()).hexdigest(),
+            "ts": timestamp(),
+            "user": username,
+            "msg": message,
+            "avatar": avatar,
+            "reactions": {}
+        }
         self.history.append(entry)
         if len(self.history) > 200:
             self.history = self.history[-200:]
+            
+        # SSE broadcast
+        broadcast_sse("message", {
+            "room": self.name,
+            "message": entry
+        })
+        
+        # Socket broadcast
+        broadcast_to_sockets(self.name, 'chat', room=self.name, user=username, avatar=avatar, msg=message)
+        return entry
 
     def get_recent(self, n: int = 50):
         return self.history[-n:]
@@ -102,20 +162,23 @@ class ChatRoom:
             "members":    list(self.members),
             "is_private": self.is_private,
             "msg_count":  len(self.history),
+            "type":       getattr(self, "type", "text"),
+            "voice_members": list(getattr(self, "voice_members", set())),
         }
 
 
-# ── Chat Server (original socket-based) ──────────────────────
+# ── Chat Server (socket-based) ───────────────────────────────
 
 class ChatServer:
     def __init__(self, host: str = "127.0.0.1", port: int = 9000):
         self.host    = host
         self.port    = port
-        self.users   : dict[str, UserProfile]         = {}
+        self.users   = global_users
         self.clients : dict[socket.socket, str]       = {}
-        self.rooms   : dict[str, ChatRoom]            = {}
-        self.lock    = threading.Lock()
+        self.rooms   = chat_rooms
+        self.lock    = chat_lock
         self._create_room("general", "system")
+        self._create_room("gaming",  "system")
         self._create_room("random",  "system")
         self._running = False
 
@@ -198,9 +261,6 @@ class ChatServer:
                 profile = self.users[username]
                 profile.msg_count += 1
                 self.rooms[room_name].add_message(username, msg)
-                avatar = profile.avatar
-                self._broadcast_room(room_name, 'chat',
-                    room=room_name, user=username, avatar=avatar, msg=msg)
         elif t == 'join_room':
             room_name = pkt.get('room', '').strip()
             if not username:
@@ -211,7 +271,7 @@ class ChatServer:
                 with self.lock:
                     self.rooms[room_name].members.add(username)
                 self._send(sock, 'joined_room', room=room_name,
-                    history=[{"ts": e[0], "user": e[1], "msg": e[2]}
+                    history=[{"ts": e["ts"], "user": e["user"], "msg": e["msg"]}
                              for e in self.rooms[room_name].get_recent()])
                 self._broadcast_room(room_name, 'system',
                     msg=f"{self.users[username].avatar} {username} joined #{room_name}",
@@ -274,12 +334,18 @@ class ChatServer:
                 self.users[username].status = "offline"
         if username:
             self._broadcast_all('system', msg=f"👋 {username} left the server.")
+            broadcast_sse("presence", {
+                "username": username,
+                "status": "offline"
+            })
         try:
             sock.close()
         except Exception:
             pass
 
     def start(self):
+        global active_server_instance
+        active_server_instance = self
         self._running = True
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -304,7 +370,7 @@ class ChatServer:
             print("\n  Server stopped.")
 
 
-# ── Chat Client (original socket-based) ──────────────────────
+# ── Chat Client (socket-based) ───────────────────────────────
 
 class ChatClient:
     def __init__(self, host: str = "127.0.0.1", port: int = 9000):
@@ -523,43 +589,38 @@ class ChatDemo:
 # ══════════════════════════════════════════════════════════════
 
 app = Flask(__name__)
+app.secret_key = "pinnacle_chat_super_secret_key_99"
 
-# ── In-memory state ───────────────────────────────────────────
-chat_lock = threading.Lock()
-
-# Bot users (fixed avatars)
-BOT_PROFILES = {
-    "Alice": UserProfile.__new__(UserProfile),
-    "Bob":   UserProfile.__new__(UserProfile),
-    "Carol": UserProfile.__new__(UserProfile),
-}
+# Bot users (fixed avatars seeded in global_users)
+BOT_PROFILES = {}
 for _name, _avatar in [("Alice", "🦊"), ("Bob", "🐯"), ("Carol", "🦉")]:
-    p = BOT_PROFILES[_name]
-    p.username  = _name
+    p = UserProfile(_name)
     p.avatar    = _avatar
-    p.joined_at = datetime.datetime.now()
     p.pw_hash   = ""
     p.status    = "online"
-    p.msg_count = 0
-
-# The web user profile (set on first message or from avatar selector)
-web_user = {
-    "username": "You",
-    "avatar": "🐼",
-    "status": "online",
-}
-
-# Chat rooms
-chat_rooms: dict[str, ChatRoom] = {}
+    global_users[_name] = p
+    BOT_PROFILES[_name] = p
 
 def _init_rooms():
     """Create pre-seeded rooms with demo messages."""
     global chat_rooms
+    
+    # Text channels
     chat_rooms["general"] = ChatRoom("general", "system")
+    chat_rooms["general"].type = "text"
     chat_rooms["gaming"]  = ChatRoom("gaming",  "system")
+    chat_rooms["gaming"].type = "text"
     chat_rooms["random"]  = ChatRoom("random",  "system")
+    chat_rooms["random"].type = "text"
+
+    # Voice channels
+    chat_rooms["Lounge"] = ChatRoom("Lounge", "system")
+    chat_rooms["Lounge"].type = "voice"
+    chat_rooms["Gaming Voice"] = ChatRoom("Gaming Voice", "system")
+    chat_rooms["Gaming Voice"].type = "voice"
+
     for r in chat_rooms.values():
-        r.members = {"Alice", "Bob", "Carol", "You"}
+        r.members.update(["Alice", "Bob", "Carol"])
 
     # Seed general
     seed_general = [
@@ -626,7 +687,7 @@ BOT_REPLIES = {
 def _schedule_bot_reply(room_name: str):
     """Schedule a bot to reply in 1-2 seconds on a background thread."""
     def _reply():
-        delay = random.uniform(1.0, 2.0)
+        delay = random.uniform(1.2, 2.2)
         time.sleep(delay)
         bot_name = random.choice(["Alice", "Bob", "Carol"])
         bot = BOT_PROFILES[bot_name]
@@ -637,6 +698,38 @@ def _schedule_bot_reply(room_name: str):
                 chat_rooms[room_name].add_message(bot_name, msg)
                 bot.msg_count += 1
 
+    t = threading.Thread(target=_reply, daemon=True)
+    t.start()
+
+def get_dm_bot_target(room_name: str, current_user: str):
+    if not room_name.startswith("dm__"):
+        return None
+    parts = room_name[4:].split("__")
+    if len(parts) == 2:
+        other = parts[1] if parts[0] == current_user else parts[0]
+        if other in BOT_PROFILES:
+            return other
+    return None
+
+def _schedule_bot_dm_reply(room_name: str, bot_name: str):
+    def _reply():
+        delay = random.uniform(1.2, 2.2)
+        time.sleep(delay)
+        bot = BOT_PROFILES[bot_name]
+        pool = [
+            "Hey! How's your day going?",
+            "That's super cool! Tell me more about it.",
+            "I'm actually coding a new Flask feature right now! 🐍",
+            "Haha! That's awesome. 😂",
+            "Do you want to play Minecraft later? ⛏️",
+            "I totally agree with that!",
+            "Let me think about it... 🤔",
+        ]
+        msg = random.choice(pool)
+        with chat_lock:
+            if room_name in chat_rooms:
+                chat_rooms[room_name].add_message(bot_name, msg)
+                bot.msg_count += 1
     t = threading.Thread(target=_reply, daemon=True)
     t.start()
 
@@ -655,248 +748,549 @@ HTML_TEMPLATE = r"""
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --bg:#1e1f22;--bg-deep:#17181b;--card:#2b2d31;--card-hover:#32353b;
-  --sidebar:#1e1f22;--accent:#5865f2;--accent-glow:rgba(88,101,242,.25);
-  --text:#dbdee1;--text-muted:#949ba4;--text-dim:#6d6f78;
-  --border:rgba(255,255,255,.06);--border-accent:rgba(88,101,242,.4);
-  --success:#23a55a;--warning:#f0b232;--danger:#da373c;
-  --glass:rgba(43,45,49,.65);--glass-border:rgba(255,255,255,.08);
-  --font:'Outfit',sans-serif;--mono:'JetBrains Mono',monospace;
-  --radius:12px;--radius-sm:8px;
+  --bg-primary:#313338;
+  --bg-secondary:#2b2d31;
+  --bg-secondary-alt:#232428;
+  --bg-tertiary:#1e1f22;
+  --bg-modifier-selected:rgba(79,84,92,0.32);
+  --bg-modifier-hover:rgba(79,84,92,0.16);
+  --bg-floating:#111214;
+  --accent:#5865f2;
+  --accent-hover:#4752c4;
+  --text-normal:#dbdee1;
+  --text-muted:#949ba4;
+  --text-dim:#4e5058;
+  --border:rgba(255,255,255,0.05);
+  --status-online:#23a55a;
+  --status-idle:#f0b232;
+  --status-dnd:#f23f43;
+  --status-offline:#80848e;
+  --radius-lg:16px;
+  --radius-md:8px;
+  --radius-sm:4px;
+  --font:'Outfit',sans-serif;
 }
-html,body{height:100%;overflow:hidden}
-body{font-family:var(--font);background:var(--bg-deep);color:var(--text);display:flex;flex-direction:column}
+html,body{height:100%;overflow:hidden;font-family:var(--font);background:var(--bg-tertiary);color:var(--text-normal)}
 
 /* ── Scrollbar ── */
-::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:3px}
-::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.2)}
+::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.3);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,0.5)}
 
-/* ── Top Bar ── */
-.topbar{
-  height:48px;min-height:48px;display:flex;align-items:center;
-  padding:0 20px;background:var(--card);border-bottom:1px solid var(--border);
-  gap:12px;z-index:10;
-}
-.topbar .hash{color:var(--text-muted);font-size:22px;font-weight:300}
-.topbar .room-name{font-weight:600;font-size:15px;color:var(--text)}
-.topbar .room-desc{color:var(--text-muted);font-size:13px;margin-left:12px;
-  padding-left:12px;border-left:1px solid var(--border)}
-.topbar .brand{margin-left:auto;font-size:12px;font-family:var(--mono);
-  color:var(--text-dim);letter-spacing:1px;text-transform:uppercase}
-
-/* ── Layout ── */
-.app-layout{display:flex;flex:1;overflow:hidden}
-
-/* ── Left Sidebar ── */
-.sidebar-left{
-  width:220px;min-width:220px;background:var(--sidebar);
-  border-right:1px solid var(--border);display:flex;flex-direction:column;
-  padding:0;overflow-y:auto;
-}
-.sidebar-header{
-  padding:16px 16px 12px;font-size:11px;font-weight:600;
-  text-transform:uppercase;letter-spacing:1.2px;color:var(--text-muted);
-}
-.channel-list{list-style:none;padding:0 8px}
-.channel-item{
-  display:flex;align-items:center;gap:8px;padding:8px 12px;
-  border-radius:var(--radius-sm);cursor:pointer;font-size:14px;
-  color:var(--text-muted);transition:all .15s ease;margin-bottom:2px;
-  font-weight:500;position:relative;
-}
-.channel-item:hover{background:var(--card-hover);color:var(--text)}
-.channel-item.active{background:var(--accent-glow);color:#fff}
-.channel-item.active::before{
-  content:'';position:absolute;left:-8px;top:50%;transform:translateY(-50%);
-  width:4px;height:20px;background:var(--accent);border-radius:0 4px 4px 0;
-}
-.channel-item .hash-icon{font-family:var(--mono);font-size:16px;font-weight:700;opacity:.6}
-.channel-item.active .hash-icon{opacity:1}
-.channel-item .badge{
-  margin-left:auto;background:var(--danger);color:#fff;font-size:11px;
-  font-weight:600;padding:1px 6px;border-radius:10px;min-width:18px;
-  text-align:center;font-family:var(--mono);
+.app-container {
+  display: flex; height: 100vh; width: 100vw; overflow: hidden;
 }
 
-/* Avatar selector */
-.avatar-section{
-  margin-top:auto;padding:12px;border-top:1px solid var(--border);
+/* ── Left Navigation Bar ── */
+.nav-sidebar {
+  width: 72px; background: var(--bg-tertiary); display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 8px; flex-shrink: 0;
 }
-.avatar-card{
-  display:flex;align-items:center;gap:10px;padding:10px 12px;
-  background:var(--bg-deep);border-radius:var(--radius-sm);
+.nav-icon {
+  width: 48px; height: 48px; border-radius: 50%; background: var(--bg-primary); display: flex; align-items: center; justify-content: center; font-size: 20px; cursor: pointer; transition: all 0.2s ease-in-out; position: relative; color: var(--text-normal);
 }
-.avatar-emoji{font-size:28px;line-height:1}
-.avatar-info{flex:1}
-.avatar-info .name{font-size:13px;font-weight:600;color:var(--text)}
-.avatar-info .status-text{font-size:11px;color:var(--success)}
-.avatar-select{
-  background:var(--card);border:1px solid var(--border);color:var(--text);
-  border-radius:6px;padding:4px;font-size:18px;cursor:pointer;
-  outline:none;transition:border-color .15s;
+.nav-icon:hover {
+  border-radius: 35%; background: var(--accent); color: white;
 }
-.avatar-select:focus{border-color:var(--accent)}
-
-/* ── Center Chat ── */
-.chat-center{flex:1;display:flex;flex-direction:column;min-width:0}
-.messages-area{
-  flex:1;overflow-y:auto;padding:16px 20px;display:flex;
-  flex-direction:column;gap:2px;
+.nav-icon.active {
+  border-radius: 35%; background: var(--accent); color: white;
+}
+.nav-icon.active::before {
+  content: ''; position: absolute; left: 0; width: 4px; height: 40px; background: white; border-radius: 0 4px 4px 0;
+}
+.nav-separator {
+  width: 32px; height: 2px; background: var(--bg-modifier-selected); margin: 4px 0;
 }
 
-/* Message groups */
-.msg-group{display:flex;gap:12px;padding:6px 0}
-.msg-group:hover{background:rgba(255,255,255,.02);border-radius:var(--radius-sm)}
-.msg-avatar{
-  font-size:28px;width:40px;height:40px;display:flex;
-  align-items:center;justify-content:center;flex-shrink:0;
-  background:var(--bg-deep);border-radius:50%;margin-top:2px;
+/* ── Channels/DMs Sidebar ── */
+.channels-sidebar {
+  width: 240px; background: var(--bg-secondary); display: flex; flex-direction: column; flex-shrink: 0; border-right: 1px solid var(--border);
 }
-.msg-body{flex:1;min-width:0}
-.msg-header{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
-.msg-user{font-weight:600;font-size:14px;color:var(--accent);cursor:pointer}
-.msg-user:hover{text-decoration:underline}
-.msg-time{font-size:11px;font-family:var(--mono);color:var(--text-dim);font-weight:400}
-.msg-text{font-size:14px;line-height:1.45;color:var(--text);word-break:break-word}
-.msg-text.system-msg{color:var(--text-muted);font-style:italic;font-size:13px}
+.sidebar-header {
+  height: 48px; padding: 0 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; font-weight: 700; font-size: 15px;
+}
+.sidebar-scrollable {
+  flex: 1; overflow-y: auto; padding: 12px 8px; display: flex; flex-direction: column; gap: 16px;
+}
+.channel-group-header {
+  font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; padding: 0 8px 4px; display: flex; align-items: center; justify-content: space-between;
+}
+.btn-add-channel {
+  background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; transition: color 0.15s;
+}
+.btn-add-channel:hover {
+  color: var(--text-normal);
+}
+.channel-list {
+  list-style: none; display: flex; flex-direction: column; gap: 2px;
+}
+.channel-item-container {
+  display: flex; flex-direction: column;
+}
+.channel-item {
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: var(--radius-md); cursor: pointer; color: var(--text-muted); font-size: 14px; font-weight: 500; transition: all 0.15s; position: relative;
+}
+.channel-item:hover {
+  background: var(--bg-modifier-hover); color: var(--text-normal);
+}
+.channel-item.active {
+  background: var(--bg-modifier-selected); color: white;
+}
+.channel-item .hash-icon {
+  font-size: 16px; width: 20px; text-align: center;
+}
+.channel-item .badge {
+  margin-left: auto; background: var(--status-dnd); color: white; font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 10px;
+}
+.dm-status-dot {
+  position: absolute; right: 8px; width: 8px; height: 8px; border-radius: 50%;
+}
+.dm-status-dot.online { background: var(--status-online); }
+.dm-status-dot.idle { background: var(--status-idle); }
+.dm-status-dot.dnd { background: var(--status-dnd); }
+.dm-status-dot.offline { background: var(--status-offline); }
 
-/* Fade-in animation */
-@keyframes msgFadeIn{
-  from{opacity:0;transform:translateY(8px)}
-  to{opacity:1;transform:translateY(0)}
+.voice-users {
+  list-style: none; padding-left: 28px; display: flex; flex-direction: column; gap: 2px; margin: 2px 0 6px;
 }
-.msg-group.new-msg{animation:msgFadeIn .3s ease forwards}
+.voice-user-item {
+  display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-normal); padding: 4px;
+}
+.voice-user-item .v-avatar {
+  font-size: 14px;
+}
 
-/* ── Input Bar ── */
-.input-bar{
-  padding:0 20px 20px;
+/* ── Voice Connected State Panel ── */
+.voice-panel {
+  background: var(--bg-secondary-alt); padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border);
 }
-.input-wrapper{
-  display:flex;align-items:center;gap:0;
-  background:var(--card);border:1px solid var(--border);
-  border-radius:var(--radius);overflow:hidden;
-  transition:border-color .2s;
+.voice-info {
+  display: flex; flex-direction: column; gap: 2px;
 }
-.input-wrapper:focus-within{border-color:var(--accent)}
-.input-wrapper input{
-  flex:1;background:transparent;border:none;outline:none;
-  color:var(--text);font-family:var(--font);font-size:14px;
-  padding:14px 16px;
+.voice-status {
+  font-size: 12px; font-weight: 700; color: var(--status-online); display: flex; align-items: center; gap: 4px;
 }
-.input-wrapper input::placeholder{color:var(--text-dim)}
-.send-btn{
-  display:flex;align-items:center;justify-content:center;
-  width:44px;height:44px;background:var(--accent);border:none;
-  color:#fff;cursor:pointer;font-size:18px;transition:all .15s;
-  margin:3px;border-radius:var(--radius-sm);
+.voice-status::before {
+  content: ''; display: inline-block; width: 6px; height: 6px; background: var(--status-online); border-radius: 50%;
 }
-.send-btn:hover{background:#4752c4;transform:scale(1.05)}
-.send-btn:active{transform:scale(.95)}
-.send-btn svg{width:18px;height:18px}
+.voice-room {
+  font-size: 13px; font-weight: 600; color: white; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.voice-controls {
+  display: flex; gap: 4px;
+}
+.voice-controls button {
+  background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 6px; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: all 0.15s;
+}
+.voice-controls button:hover {
+  background: var(--bg-modifier-hover); color: var(--text-normal);
+}
+.voice-controls button.active {
+  color: var(--status-dnd);
+}
+.voice-controls button.disconnect:hover {
+  color: var(--status-dnd);
+}
+.voice-controls svg {
+  width: 16px; height: 16px;
+}
 
-/* ── Right Sidebar ── */
-.sidebar-right{
-  width:220px;min-width:220px;background:var(--sidebar);
-  border-left:1px solid var(--border);overflow-y:auto;padding:0;
+/* ── User Footer ── */
+.user-footer {
+  background: var(--bg-secondary-alt); height: 52px; padding: 0 8px; display: flex; align-items: center; gap: 8px;
 }
-.users-header{
-  padding:16px 16px 12px;font-size:11px;font-weight:600;
-  text-transform:uppercase;letter-spacing:1.2px;color:var(--text-muted);
+.footer-avatar {
+  font-size: 26px; cursor: pointer; transition: transform 0.2s; position: relative;
 }
-.user-list{list-style:none;padding:0 8px}
-.user-item{
-  display:flex;align-items:center;gap:10px;padding:8px 12px;
-  border-radius:var(--radius-sm);transition:background .15s;cursor:default;
-  margin-bottom:2px;
+.footer-avatar:hover {
+  transform: scale(1.1);
 }
-.user-item:hover{background:var(--card-hover)}
-.user-item .u-avatar{font-size:22px}
-.user-item .u-name{font-size:13px;font-weight:500;color:var(--text)}
-.user-item .u-status{
-  width:8px;height:8px;border-radius:50%;margin-left:auto;flex-shrink:0;
+.footer-info {
+  flex: 1; display: flex; flex-direction: column; min-width: 0;
 }
-.u-status.online{background:var(--success);box-shadow:0 0 6px var(--success)}
-.u-status.idle{background:var(--warning)}
-.u-status.offline{background:var(--text-dim)}
+.footer-name {
+  font-size: 13px; font-weight: 700; color: white; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.footer-status {
+  font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px;
+}
+.footer-status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+}
+.footer-status-dot.online { background: var(--status-online); }
+.footer-status-dot.idle { background: var(--status-idle); }
+.footer-status-dot.dnd { background: var(--status-dnd); }
+.footer-status-dot.offline { background: var(--status-offline); }
 
-/* ── Welcome splash ── */
-.welcome-splash{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  padding:40px;text-align:center;gap:8px;margin-bottom:12px;
+.footer-actions {
+  display: flex; gap: 2px;
 }
-.welcome-splash .big-hash{font-size:52px;color:var(--accent);opacity:.4;font-family:var(--mono);font-weight:700}
-.welcome-splash h2{font-size:22px;font-weight:700;color:var(--text)}
-.welcome-splash p{font-size:13px;color:var(--text-muted);max-width:380px}
+.footer-actions button {
+  background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 6px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; transition: all 0.15s;
+}
+.footer-actions button:hover {
+  background: var(--bg-modifier-hover); color: var(--text-normal);
+}
+.footer-actions svg {
+  width: 16px; height: 16px;
+}
 
-/* ── Typing indicator ── */
-.typing-indicator{
-  padding:0 20px 4px;font-size:12px;color:var(--text-muted);
-  font-style:italic;min-height:20px;
+/* ── Active Chat Area ── */
+.chat-area {
+  flex: 1; background: var(--bg-primary); display: flex; flex-direction: column; min-width: 0; position: relative;
+}
+.chat-header {
+  height: 48px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 8px; flex-shrink: 0;
+}
+.chat-header .hash {
+  font-size: 20px; color: var(--text-muted); font-weight: 300;
+}
+.chat-header .title {
+  font-weight: 700; font-size: 15px; color: white;
+}
+.chat-header .description {
+  font-size: 12px; color: var(--text-muted); border-left: 1px solid var(--border); padding-left: 8px; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px;
+}
+.chat-header .logout-btn {
+  margin-left: auto; background: none; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 4px 10px; font-size: 12px; font-weight: 600; color: var(--text-muted); cursor: pointer; transition: all 0.15s;
+}
+.chat-header .logout-btn:hover {
+  border-color: var(--status-dnd); color: white; background: var(--status-dnd);
+}
+.messages-scroller {
+  flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px;
+}
+
+/* ── Welcome Splash ── */
+.welcome-splash {
+  display: flex; flex-direction: column; justify-content: center; padding: 20px 0; gap: 8px; border-bottom: 1px solid var(--border); margin-bottom: 8px;
+}
+.welcome-splash .big-hash {
+  font-size: 48px; width: 68px; height: 68px; background: var(--bg-secondary); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; color: white;
+}
+.welcome-splash h2 {
+  font-size: 24px; font-weight: 700; color: white;
+}
+.welcome-splash p {
+  font-size: 14px; color: var(--text-muted);
+}
+
+/* ── Messages & Reactions ── */
+.msg-group {
+  display: flex; gap: 16px; padding: 4px 8px; border-radius: var(--radius-md); transition: background 0.1s; position: relative;
+}
+.msg-group:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+.msg-avatar {
+  font-size: 32px; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: var(--bg-tertiary); border-radius: 50%; flex-shrink: 0;
+}
+.msg-body {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
+}
+.msg-header {
+  display: flex; align-items: baseline; gap: 8px;
+}
+.msg-user {
+  font-size: 14px; font-weight: 600; color: white; cursor: pointer;
+}
+.msg-user:hover {
+  text-decoration: underline;
+}
+.msg-time {
+  font-size: 10px; color: var(--text-muted); font-family: monospace;
+}
+.msg-text {
+  font-size: 14px; line-height: 1.4; color: var(--text-normal); word-break: break-word; white-space: pre-wrap;
+}
+.msg-attachment {
+  margin-top: 8px; max-width: 320px; max-height: 240px; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border);
+}
+.msg-attachment img {
+  width: 100%; height: 100%; object-fit: contain;
+}
+.msg-reactions {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
+}
+.reaction-badge {
+  display: flex; align-items: center; gap: 4px; background: var(--bg-secondary-alt); border: 1px solid transparent; border-radius: var(--radius-md); padding: 2px 6px; font-size: 12px; cursor: pointer; transition: all 0.1s; user-select: none;
+}
+.reaction-badge:hover {
+  border-color: var(--text-muted); background: var(--bg-modifier-hover);
+}
+.reaction-badge.active {
+  background: rgba(88, 101, 242, 0.15); border-color: var(--accent);
+}
+.reaction-badge.active:hover {
+  background: rgba(88, 101, 242, 0.25);
+}
+.reaction-badge .count {
+  font-size: 11px; font-weight: 700; color: var(--text-normal);
+}
+.msg-hover-actions {
+  position: absolute; right: 16px; top: -12px; display: none; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: 0 4px 8px rgba(0,0,0,0.2); gap: 6px; padding: 2px 8px; z-index: 10;
+}
+.msg-group:hover .msg-hover-actions {
+  display: flex;
+}
+.msg-hover-actions span {
+  font-size: 16px; cursor: pointer; transition: transform 0.1s; padding: 2px;
+}
+.msg-hover-actions span:hover {
+  transform: scale(1.3);
+}
+
+/* ── Typing Indicator ── */
+.typing-indicator {
+  padding: 0 20px 4px; font-size: 12px; color: var(--text-muted); font-style: italic; min-height: 20px;
 }
 @keyframes blink{0%,100%{opacity:.3}50%{opacity:1}}
 .typing-dots span{animation:blink 1.4s infinite;display:inline-block}
 .typing-dots span:nth-child(2){animation-delay:.2s}
 .typing-dots span:nth-child(3){animation-delay:.4s}
 
+/* ── Input Box ── */
+.chat-input-container {
+  padding: 0 20px 24px; flex-shrink: 0;
+}
+.chat-input-wrapper {
+  background: var(--bg-secondary); border-radius: var(--radius-md); display: flex; align-items: center; padding: 0 16px; gap: 12px; border: 1px solid transparent; transition: border-color 0.15s;
+}
+.chat-input-wrapper:focus-within {
+  border-color: var(--accent);
+}
+.chat-input-wrapper input {
+  flex: 1; height: 44px; background: none; border: none; outline: none; color: var(--text-normal); font-size: 14px;
+}
+.chat-input-wrapper input::placeholder {
+  color: var(--text-muted);
+}
+.btn-input-attach, .btn-input-send {
+  background: none; border: none; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 4px; border-radius: 4px; transition: color 0.15s, background-color 0.15s;
+}
+.btn-input-attach:hover {
+  color: var(--text-normal); background: var(--bg-modifier-hover);
+}
+.btn-input-send {
+  color: var(--accent);
+}
+.btn-input-send:hover {
+  color: white; background: var(--accent);
+}
+.chat-input-wrapper svg {
+  width: 18px; height: 18px;
+}
+
+/* ── Members List Sidebar ── */
+.member-sidebar {
+  width: 240px; background: var(--bg-secondary); display: flex; flex-direction: column; flex-shrink: 0; border-left: 1px solid var(--border); overflow-y: auto; padding: 16px 8px; gap: 16px;
+}
+.member-group-header {
+  font-size: 12px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; padding-left: 8px;
+}
+.user-list {
+  list-style: none; display: flex; flex-direction: column; gap: 2px;
+}
+.user-item {
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius-md); cursor: pointer; transition: background 0.15s;
+}
+.user-item:hover {
+  background: var(--bg-modifier-hover);
+}
+.user-item .u-avatar {
+  font-size: 24px;
+}
+.user-item .u-info {
+  display: flex; flex-direction: column; flex: 1; min-width: 0;
+}
+.user-item .u-name {
+  font-size: 13.5px; font-weight: 600; color: var(--text-normal); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.user-item .u-custom-status {
+  font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.user-item .u-status {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.user-item .u-status.online { background: var(--status-online); box-shadow: 0 0 6px var(--status-online); }
+.user-item .u-status.idle { background: var(--status-idle); }
+.user-item .u-status.dnd { background: var(--status-dnd); box-shadow: 0 0 6px var(--status-dnd); }
+.user-item .u-status.offline { background: var(--status-offline); }
+
+/* ── Modals / Overlays ── */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(10, 10, 12, 0.82); backdrop-filter: blur(10px); display: flex; align-items: center; justify-content: center; z-index: 1000; opacity: 1; transition: opacity 0.25s ease;
+}
+.modal-card {
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; width: 420px; max-width: 90vw; padding: 28px; display: flex; flex-direction: column; gap: 20px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4); animation: scaleUp 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+}
+@keyframes scaleUp {
+  from { transform: scale(0.9); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.modal-title {
+  font-size: 22px; font-weight: 700; color: white; text-align: center;
+}
+.form-group {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.form-group label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-normal); letter-spacing: 0.5px;
+}
+.form-group input, .form-group select {
+  background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: var(--radius-md); height: 40px; padding: 0 12px; color: white; outline: none; font-family: var(--font); font-size: 14px; transition: border-color 0.15s;
+}
+.form-group input:focus, .form-group select:focus {
+  border-color: var(--accent);
+}
+.form-row {
+  display: flex; gap: 12px;
+}
+.form-row .form-group {
+  flex: 1;
+}
+.modal-buttons {
+  display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;
+}
+.btn-primary {
+  background: var(--accent); color: white; border: none; border-radius: var(--radius-md); font-weight: 600; padding: 10px 18px; cursor: pointer; transition: background 0.15s; font-size: 14px;
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+.btn-link {
+  background: none; border: none; color: var(--text-muted); cursor: pointer; font-weight: 600; padding: 10px; font-size: 14px; transition: color 0.15s;
+}
+.btn-link:hover {
+  color: white;
+}
+
+/* Avatar selection grid in modal */
+.avatar-grid {
+  display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; justify-items: center; margin-top: 4px;
+}
+.avatar-grid-item {
+  font-size: 28px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-md); cursor: pointer; transition: background 0.15s; border: 2px solid transparent;
+}
+.avatar-grid-item:hover {
+  background: var(--bg-modifier-hover);
+}
+.avatar-grid-item.selected {
+  background: var(--bg-modifier-selected); border-color: var(--accent);
+}
+
+.no-dms {
+  font-size: 13px; color: var(--text-muted); text-align: center; padding: 20px 8px; font-style: italic;
+}
+
 /* ── Responsive ── */
 @media(max-width:900px){
-  .sidebar-right{display:none}
-  .sidebar-left{width:64px;min-width:64px}
-  .sidebar-header,.channel-item span:not(.hash-icon),.avatar-info,.avatar-select{display:none}
-  .channel-item{justify-content:center;padding:10px}
-  .channel-item .hash-icon{font-size:18px}
-  .avatar-card{justify-content:center;padding:8px}
+  .member-sidebar{display:none}
 }
 @media(max-width:600px){
-  .sidebar-left{width:52px;min-width:52px}
+  .channels-sidebar{display:none}
 }
 </style>
 </head>
 <body>
 
-<!-- Top Bar -->
-<div class="topbar">
-  <span class="hash">#</span>
-  <span class="room-name" id="topRoomName">general</span>
-  <span class="room-desc" id="topRoomDesc">Welcome to the general chat</span>
-  <span class="brand">Pinnacle Chat v2.0</span>
-</div>
+<div class="app-container">
+  <!-- Leftmost Navigation Bar -->
+  <div class="nav-sidebar">
+    <div class="nav-icon active" id="navHome" onclick="selectView('dm')" title="Home (Direct Messages)">
+      📩
+    </div>
+    <div class="nav-separator"></div>
+    <div class="nav-icon" id="navServer" onclick="selectView('server')" title="Pinnacle Server">
+      💬
+    </div>
+  </div>
 
-<div class="app-layout">
+  <!-- Channels/DMs Sidebar -->
+  <div class="channels-sidebar">
+    <div class="sidebar-header">
+      <span id="sidebarTitle">📩 Direct Messages</span>
+      <button class="btn-add-channel" id="btnAddChannel" style="display:none;" onclick="openChannelModal()" title="Create Channel">+</button>
+    </div>
+    <div class="sidebar-scrollable">
+      <ul class="channel-list" id="channelList"></ul>
+    </div>
 
-  <!-- Left Sidebar -->
-  <div class="sidebar-left">
-    <div class="sidebar-header">💬 Channels</div>
-    <ul class="channel-list" id="channelList"></ul>
-    <div class="avatar-section">
-      <div class="avatar-card">
-        <span class="avatar-emoji" id="myAvatar">🐼</span>
-        <div class="avatar-info">
-          <div class="name" id="myName">You</div>
-          <div class="status-text">● Online</div>
-        </div>
-        <select class="avatar-select" id="avatarSelect" title="Change avatar">
-          <option>🐼</option><option>🦊</option><option>🦁</option>
-          <option>🐯</option><option>🦉</option><option>🐸</option>
-          <option>🐺</option><option>🦋</option><option>🐙</option>
-          <option>🦄</option><option>🦅</option><option>🐬</option>
-        </select>
+    <!-- Voice Panel -->
+    <div class="voice-panel" id="voicePanel" style="display:none;">
+      <div class="voice-info">
+        <span class="voice-status">Voice Connected</span>
+        <span class="voice-room" id="voiceRoomName">Lounge</span>
+      </div>
+      <div class="voice-controls">
+        <button id="btnMute" title="Mute" onclick="toggleMute()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+          </svg>
+        </button>
+        <button id="btnDeafen" title="Deafen" onclick="toggleDeafen()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 18v-6a9 9 0 0 1 18 0v6"/>
+            <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>
+          </svg>
+        </button>
+        <button class="disconnect" title="Disconnect" onclick="leaveVoice()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-6.07-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 2.59 3.4z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- User panel footer -->
+    <div class="user-footer">
+      <span class="footer-avatar" id="footerAvatar" onclick="openSettingsModal()">🐼</span>
+      <div class="footer-info">
+        <span class="footer-name" id="footerName">You</span>
+        <span class="footer-status">
+          <span class="footer-status-dot online" id="footerStatusDot"></span>
+          <span id="footerStatusText">Online</span>
+        </span>
+      </div>
+      <div class="footer-actions">
+        <button onclick="openSettingsModal()" title="User Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51-1z"/>
+          </svg>
+        </button>
       </div>
     </div>
   </div>
 
-  <!-- Center Chat -->
-  <div class="chat-center">
-    <div class="messages-area" id="messagesArea"></div>
+  <!-- Active Chat Panel -->
+  <div class="chat-area">
+    <div class="chat-header">
+      <span class="hash" id="topChannelIcon">#</span>
+      <span class="title" id="topChannelName">general</span>
+      <span class="description" id="topChannelDesc">Welcome to general</span>
+      <button class="logout-btn" onclick="logout()">Logout</button>
+    </div>
+
+    <div class="messages-scroller" id="messagesArea"></div>
+    
+    <!-- Typing indicator -->
     <div class="typing-indicator" id="typingIndicator"></div>
-    <div class="input-bar">
-      <div class="input-wrapper">
-        <input type="text" id="msgInput" placeholder="Message #general" autocomplete="off"/>
-        <button class="send-btn" id="sendBtn" title="Send message">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-               stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Message Input Bar -->
+    <div class="chat-input-container">
+      <div class="chat-input-wrapper">
+        <button class="btn-input-attach" onclick="attachImage()" title="Attach image URL">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+        </button>
+        <input type="text" id="msgInput" placeholder="Message #general" autocomplete="off" oninput="handleTyping()"/>
+        <button class="btn-input-send" onclick="sendMessage()" title="Send message">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="22" y1="2" x2="11" y2="13"/>
             <polygon points="22 2 15 22 11 13 2 9 22 2"/>
           </svg>
@@ -905,248 +1299,923 @@ body{font-family:var(--font);background:var(--bg-deep);color:var(--text);display
     </div>
   </div>
 
-  <!-- Right Sidebar -->
-  <div class="sidebar-right">
-    <div class="users-header">👥 Online — <span id="onlineCount">0</span></div>
+  <!-- Right Sidebar Members List -->
+  <div class="member-sidebar" id="memberSidebar">
+    <div class="member-group-header">Online — <span id="onlineCount">0</span></div>
     <ul class="user-list" id="userList"></ul>
   </div>
+</div>
 
+<!-- Modal: Login -->
+<div class="modal-overlay" id="loginModal" style="display:none;">
+  <div class="modal-card">
+    <h2 class="modal-title">💬 Welcome to Pinnacle Chat</h2>
+    <div class="form-group">
+      <label for="loginUsername">Username</label>
+      <input type="text" id="loginUsername" placeholder="Enter username..." autocomplete="off"/>
+    </div>
+    <div class="form-group">
+      <label for="loginPassword">Password (Optional)</label>
+      <input type="password" id="loginPassword" placeholder="Enter password..."/>
+    </div>
+    <div class="form-group">
+      <label>Choose Avatar</label>
+      <div class="avatar-grid" id="loginAvatarGrid"></div>
+    </div>
+    <div class="modal-buttons">
+      <button class="btn-primary" onclick="login()">Enter Chat</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Settings -->
+<div class="modal-overlay" id="settingsModal" style="display:none;">
+  <div class="modal-card">
+    <h2 class="modal-title">⚙️ User Settings</h2>
+    <div class="form-group">
+      <label>Change Avatar</label>
+      <div class="avatar-grid" id="settingsAvatarGrid"></div>
+    </div>
+    <div class="form-group">
+      <label for="settingsStatus">Status</label>
+      <select id="settingsStatus">
+        <option value="online">🟢 Online</option>
+        <option value="idle">🟡 Idle</option>
+        <option value="dnd">🔴 Do Not Disturb</option>
+        <option value="offline">⚪ Invisible</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="settingsCustomStatus">Custom Status Message</label>
+      <input type="text" id="settingsCustomStatus" placeholder="What's on your mind? (max 100 chars)" autocomplete="off" maxlength="100"/>
+    </div>
+    <div class="modal-buttons">
+      <button class="btn-link" onclick="closeSettingsModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveSettings()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Create Channel -->
+<div class="modal-overlay" id="channelModal" style="display:none;">
+  <div class="modal-card">
+    <h2 class="modal-title">➕ Create Channel</h2>
+    <div class="form-group">
+      <label for="channelName">Channel Name</label>
+      <input type="text" id="channelName" placeholder="e.g. support" autocomplete="off"/>
+    </div>
+    <div class="form-group">
+      <label for="channelType">Type</label>
+      <select id="channelType">
+        <option value="text"># Text Channel</option>
+        <option value="voice">🔊 Voice Channel</option>
+      </select>
+    </div>
+    <div class="form-group" style="flex-direction:row; justify-content:space-between; align-items:center;">
+      <label for="channelPrivate">Private Channel</label>
+      <input type="checkbox" id="channelPrivate" style="width:20px; height:20px; cursor:pointer;"/>
+    </div>
+    <div class="modal-buttons">
+      <button class="btn-link" onclick="closeChannelModal()">Cancel</button>
+      <button class="btn-primary" onclick="createChannel()">Create Channel</button>
+    </div>
+  </div>
 </div>
 
 <script>
 // ── State ──
 let currentRoom = 'general';
-let lastMsgCount = {};
+let myUsername = 'You';
 let myAvatar = '🐼';
-let pollInterval = null;
-let lastKnownCounts = {};
-
-const roomDescriptions = {
+let onlineUsers = [];
+let roomDescriptions = {
   general: 'Welcome to the general chat',
   gaming: 'Talk about games, find teammates',
-  random: 'Off-topic, memes, and random fun'
+  random: 'Off-topic, memes, and random fun',
+  Lounge: 'Click to join Lounge voice channel',
+  'Gaming Voice': 'Click to join Gaming Voice channel'
 };
+let lastKnownCounts = {};
+let currentView = 'dm'; // Start in Home/DMs view
+let eventSource = null;
+let currentVoiceRoom = null;
+let isMuted = false;
+let isDeafened = false;
 
-// ── Web Audio click sound ──
+// Typing states
+let typingTimeout = null;
+let activeTypingUsers = {}; // username -> timestamp
+
+// Available avatars
+const AVAILABLE_AVATARS = ["🦊", "🐼", "🦁", "🐯", "🦉", "🐸", "🐺", "🦋", "🐙", "🦄", "🦅", "🐬"];
+let selectedLoginAvatar = "🐼";
+let selectedSettingsAvatar = "🐼";
+
+// ── Web Audio click/receive sound ──
 const AudioCtx = window.AudioContext || window.webkitAudioContext;
 let audioCtx = null;
-function playClickSound(){
-  try{
-    if(!audioCtx) audioCtx = new AudioCtx();
+
+function playVoiceJoinSound() {
+  try {
+    if (!audioCtx) audioCtx = new AudioCtx();
+    const now = audioCtx.currentTime;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.connect(gain); gain.connect(audioCtx.destination);
-    osc.type = 'sine'; osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.08);
-    gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
-    osc.start(); osc.stop(audioCtx.currentTime + 0.1);
-  }catch(e){}
+    osc.type = 'sine'; osc.frequency.setValueAtTime(392, now);
+    osc.frequency.setValueAtTime(523, now + 0.12);
+    gain.gain.setValueAtTime(0.0, now);
+    gain.gain.linearRampToValueAtTime(0.06, now + 0.04);
+    gain.gain.linearRampToValueAtTime(0.06, now + 0.12);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc.start(now); osc.stop(now + 0.35);
+  } catch(e) {}
 }
-function playReceiveSound(){
-  try{
-    if(!audioCtx) audioCtx = new AudioCtx();
+
+function playVoiceLeaveSound() {
+  try {
+    if (!audioCtx) audioCtx = new AudioCtx();
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.type = 'sine'; osc.frequency.setValueAtTime(523, now);
+    osc.frequency.setValueAtTime(392, now + 0.12);
+    gain.gain.setValueAtTime(0.0, now);
+    gain.gain.linearRampToValueAtTime(0.06, now + 0.04);
+    gain.gain.linearRampToValueAtTime(0.06, now + 0.12);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    osc.start(now); osc.stop(now + 0.35);
+  } catch(e) {}
+}
+
+function playReceiveSound() {
+  try {
+    if (!audioCtx) audioCtx = new AudioCtx();
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.connect(gain); gain.connect(audioCtx.destination);
     osc.type = 'sine'; osc.frequency.setValueAtTime(523, audioCtx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(784, audioCtx.currentTime + 0.06);
-    gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
     osc.start(); osc.stop(audioCtx.currentTime + 0.08);
-  }catch(e){}
+  } catch(e) {}
 }
 
-// ── API helpers ──
-async function api(path, opts){
+function playShortBeep(freq, dur) {
+  try {
+    if (!audioCtx) audioCtx = new AudioCtx();
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.type = 'sine'; osc.frequency.setValueAtTime(freq, now);
+    gain.gain.setValueAtTime(0.03, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    osc.start(now); osc.stop(now + dur);
+  } catch(e) {}
+}
+
+// ── API helper ──
+async function api(path, opts) {
   const r = await fetch(path, opts);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({error: 'An error occurred'}));
+    throw new Error(err.error || 'Server error');
+  }
   return r.json();
 }
 
-// ── Load rooms ──
-async function loadRooms(){
-  const data = await api('/api/chat/rooms');
-  const list = document.getElementById('channelList');
-  list.innerHTML = '';
-  data.rooms.forEach(r => {
-    const li = document.createElement('li');
-    li.className = 'channel-item' + (r.name === currentRoom ? ' active' : '');
-    const unread = (lastKnownCounts[r.name] || 0) > 0 && r.name !== currentRoom;
-    li.innerHTML = '<span class="hash-icon">#</span><span>' + r.name + '</span>' +
-                   (unread ? '<span class="badge">' + lastKnownCounts[r.name] + '</span>' : '');
-    li.onclick = () => switchRoom(r.name);
-    list.appendChild(li);
-  });
-}
-
-// ── Load users ──
-async function loadUsers(){
-  const data = await api('/api/chat/users');
-  const list = document.getElementById('userList');
-  list.innerHTML = '';
-  document.getElementById('onlineCount').textContent = data.users.length;
-  data.users.forEach(u => {
-    const li = document.createElement('li');
-    li.className = 'user-item';
-    const statusCls = u.status === 'online' ? 'online' : u.status === 'idle' ? 'idle' : 'offline';
-    li.innerHTML = '<span class="u-avatar">' + u.avatar + '</span>' +
-                   '<span class="u-name">' + u.username + '</span>' +
-                   '<span class="u-status ' + statusCls + '"></span>';
-    list.appendChild(li);
-  });
-}
-
-// ── Load messages ──
-let previousMsgLen = 0;
-async function loadMessages(scroll){
-  const data = await api('/api/chat/messages?room=' + currentRoom);
-  const area = document.getElementById('messagesArea');
-  const msgs = data.messages;
-  const isNew = msgs.length > previousMsgLen;
-  previousMsgLen = msgs.length;
-
-  // Build HTML
-  let html = '<div class="welcome-splash"><div class="big-hash">#</div>' +
-             '<h2>Welcome to #' + currentRoom + '</h2>' +
-             '<p>' + (roomDescriptions[currentRoom]||'Chat away!') + '</p></div>';
-
-  let lastUser = null;
-  msgs.forEach((m, i) => {
-    const isNewMsg = isNew && i >= msgs.length - 1;
-    if(m.user !== lastUser){
-      html += '<div class="msg-group' + (isNewMsg ? ' new-msg' : '') + '">' +
-              '<div class="msg-avatar">' + m.avatar + '</div>' +
-              '<div class="msg-body">' +
-              '<div class="msg-header"><span class="msg-user">' + m.user + '</span>' +
-              '<span class="msg-time">' + m.ts + '</span></div>' +
-              '<div class="msg-text">' + escapeHtml(m.msg) + '</div></div></div>';
+// ── Authentication check ──
+async function checkAuth() {
+  try {
+    const data = await api('/api/auth/me');
+    if (data.logged_in) {
+      myUsername = data.user.username;
+      myAvatar = data.user.avatar;
+      
+      document.getElementById('footerName').textContent = myUsername;
+      document.getElementById('footerAvatar').textContent = myAvatar;
+      
+      const dot = document.getElementById('footerStatusDot');
+      dot.className = 'footer-status-dot ' + data.user.status;
+      document.getElementById('footerStatusText').textContent = getStatusLabel(data.user.status);
+      
+      document.getElementById('loginModal').style.display = 'none';
+      
+      // Start Real-Time SSE Stream
+      connectSSE();
+      
+      // Load Initial state
+      await loadUsers();
+      selectView('server'); // Default to server channels on load
+      
     } else {
-      html += '<div class="msg-group' + (isNewMsg ? ' new-msg' : '') +
-              '" style="padding-left:52px;padding-top:0;padding-bottom:0">' +
-              '<div class="msg-body"><div class="msg-text">' + escapeHtml(m.msg) + '</div></div></div>';
+      showLoginModal();
     }
-    lastUser = m.user;
-  });
-
-  area.innerHTML = html;
-  if(scroll !== false){
-    area.scrollTop = area.scrollHeight;
-  }
-  if(isNew && msgs.length > 0){
-    const lastMsg = msgs[msgs.length - 1];
-    if(lastMsg.user !== 'You'){
-      playReceiveSound();
-    }
+  } catch (e) {
+    showLoginModal();
   }
 }
 
-function escapeHtml(t){
+function getStatusLabel(st) {
+  if (st === 'online') return 'Online';
+  if (st === 'idle') return 'Idle';
+  if (st === 'dnd') return 'Do Not Disturb';
+  return 'Invisible';
+}
+
+function showLoginModal() {
+  document.getElementById('loginModal').style.display = 'flex';
+  const grid = document.getElementById('loginAvatarGrid');
+  grid.innerHTML = '';
+  AVAILABLE_AVATARS.forEach(emoji => {
+    const div = document.createElement('div');
+    div.className = 'avatar-grid-item' + (emoji === selectedLoginAvatar ? ' selected' : '');
+    div.textContent = emoji;
+    div.onclick = () => {
+      selectedLoginAvatar = emoji;
+      showLoginModal(); // Redraw selection outline
+    };
+    grid.appendChild(div);
+  });
+}
+
+async function login() {
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  if (!username) {
+    alert("Username cannot be empty");
+    return;
+  }
+  try {
+    await api('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: username, password: password, avatar: selectedLoginAvatar})
+    });
+    checkAuth();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function logout() {
+  try {
+    await api('/api/auth/logout', {method: 'POST'});
+    if (eventSource) eventSource.close();
+    location.reload();
+  } catch (e) {
+    location.reload();
+  }
+}
+
+// ── User Settings Modal ──
+function openSettingsModal() {
+  selectedSettingsAvatar = myAvatar;
+  document.getElementById('settingsModal').style.display = 'flex';
+  drawSettingsAvatars();
+  
+  // Set current values
+  const dot = document.getElementById('footerStatusDot');
+  let currentStatus = 'online';
+  if (dot.classList.contains('idle')) currentStatus = 'idle';
+  else if (dot.classList.contains('dnd')) currentStatus = 'dnd';
+  else if (dot.classList.contains('offline')) currentStatus = 'offline';
+  
+  document.getElementById('settingsStatus').value = currentStatus;
+  
+  const userObj = onlineUsers.find(u => u.username === myUsername);
+  document.getElementById('settingsCustomStatus').value = userObj ? (userObj.custom_status || '') : '';
+}
+
+function drawSettingsAvatars() {
+  const grid = document.getElementById('settingsAvatarGrid');
+  grid.innerHTML = '';
+  AVAILABLE_AVATARS.forEach(emoji => {
+    const div = document.createElement('div');
+    div.className = 'avatar-grid-item' + (emoji === selectedSettingsAvatar ? ' selected' : '');
+    div.textContent = emoji;
+    div.onclick = () => {
+      selectedSettingsAvatar = emoji;
+      drawSettingsAvatars();
+    };
+    grid.appendChild(div);
+  });
+}
+
+function closeSettingsModal() {
+  document.getElementById('settingsModal').style.display = 'none';
+}
+
+async function saveSettings() {
+  const status = document.getElementById('settingsStatus').value;
+  const customStatus = document.getElementById('settingsCustomStatus').value.trim();
+  
+  try {
+    await api('/api/user/settings', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        status: status,
+        custom_status: customStatus,
+        avatar: selectedSettingsAvatar
+      })
+    });
+    closeSettingsModal();
+    // Profile loads automatically via SSE presence event, but let's refresh locally to be safe
+    myAvatar = selectedSettingsAvatar;
+    document.getElementById('footerAvatar').textContent = myAvatar;
+    document.getElementById('footerStatusDot').className = 'footer-status-dot ' + status;
+    document.getElementById('footerStatusText').textContent = getStatusLabel(status);
+    loadUsers();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+// ── Views management (Server Channels vs Home DMs) ──
+function selectView(view) {
+  currentView = view;
+  document.getElementById('navHome').classList.toggle('active', view === 'dm');
+  document.getElementById('navServer').classList.toggle('active', view === 'server');
+  
+  if (view === 'server') {
+    document.getElementById('sidebarTitle').textContent = '💬 Channels';
+    document.getElementById('btnAddChannel').style.display = 'block';
+    loadRooms();
+  } else {
+    document.getElementById('sidebarTitle').textContent = '📩 Direct Messages';
+    document.getElementById('btnAddChannel').style.display = 'none';
+    loadDMsList();
+  }
+}
+
+// ── Channels Loader ──
+async function loadRooms() {
+  try {
+    const data = await api('/api/chat/rooms');
+    if (currentView !== 'server') return;
+    
+    const list = document.getElementById('channelList');
+    list.innerHTML = '';
+    
+    // Sort text rooms first, then voice rooms
+    data.rooms.sort((a, b) => {
+      const typeA = a.type || 'text';
+      const typeB = b.type || 'text';
+      if (typeA === 'voice' && typeB !== 'voice') return 1;
+      if (typeA !== 'voice' && typeB === 'voice') return -1;
+      return a.name.localeCompare(b.name);
+    });
+
+    data.rooms.forEach(r => {
+      if (r.type === 'dm') return; // DMs handled separately
+      
+      const isVoice = r.type === 'voice';
+      const li = document.createElement('li');
+      li.className = 'channel-item-container';
+      
+      let voiceMembersHtml = '';
+      if (isVoice && r.voice_members && r.voice_members.length > 0) {
+        voiceMembersHtml = '<ul class="voice-users">';
+        r.voice_members.forEach(m => {
+          const userObj = onlineUsers.find(u => u.username === m);
+          const av = userObj ? userObj.avatar : '👤';
+          voiceMembersHtml += `<li class="voice-user-item">
+              <span class="v-avatar">${av}</span>
+              <span class="v-name">${m}</span>
+          </li>`;
+        });
+        voiceMembersHtml += '</ul>';
+      }
+      
+      const activeClass = (r.name === currentRoom && !isVoice) ? ' active' : '';
+      const unread = (lastKnownCounts[r.name] || 0) > 0 && r.name !== currentRoom;
+      
+      li.innerHTML = `
+        <div class="channel-item${activeClass}" onclick="${isVoice ? `joinVoice('${r.name}')` : `switchRoom('${r.name}')`}">
+          <span class="hash-icon">${isVoice ? '🔊' : '#'}</span>
+          <span>${r.name}</span>
+          ${unread ? `<span class="badge">${lastKnownCounts[r.name]}</span>` : ''}
+        </div>
+        ${voiceMembersHtml}
+      `;
+      list.appendChild(li);
+    });
+  } catch (e) {}
+}
+
+// ── DMs List Loader ──
+async function loadDMsList() {
+  try {
+    const data = await api('/api/chat/rooms');
+    if (currentView !== 'dm') return;
+    
+    const list = document.getElementById('channelList');
+    list.innerHTML = '';
+    
+    const dmRooms = data.rooms.filter(r => r.type === 'dm');
+    if (dmRooms.length === 0) {
+      list.innerHTML = '<div class="no-dms">No active conversations. Click a user in the online list to start a DM!</div>';
+      return;
+    }
+    
+    dmRooms.forEach(r => {
+      const targetUser = getDMTargetName(r.name);
+      const userObj = onlineUsers.find(u => u.username === targetUser);
+      const av = userObj ? userObj.avatar : '👤';
+      const statusCls = userObj ? (userObj.status === 'online' ? 'online' : userObj.status === 'idle' ? 'idle' : userObj.status === 'dnd' ? 'dnd' : 'offline') : 'offline';
+      
+      const activeClass = r.name === currentRoom ? ' active' : '';
+      const unread = (lastKnownCounts[r.name] || 0) > 0 && r.name !== currentRoom;
+      
+      const li = document.createElement('li');
+      li.className = 'channel-item-container';
+      li.innerHTML = `
+        <div class="channel-item${activeClass}" onclick="switchRoom('${r.name}')">
+          <span class="hash-icon">${av}</span>
+          <span>${targetUser}</span>
+          <span class="dm-status-dot ${statusCls}"></span>
+          ${unread ? `<span class="badge">${lastKnownCounts[r.name]}</span>` : ''}
+        </div>
+      `;
+      list.appendChild(li);
+    });
+  } catch(e) {}
+}
+
+function getDMTargetName(roomName) {
+  if (!roomName.startsWith('dm__')) return roomName;
+  const parts = roomName.substring(4).split('__');
+  return parts[0] === myUsername ? parts[1] : parts[0];
+}
+
+// ── Online Users Loader ──
+async function loadUsers() {
+  try {
+    const data = await api('/api/chat/users');
+    onlineUsers = data.users;
+    
+    const list = document.getElementById('userList');
+    list.innerHTML = '';
+    
+    // Sort online users first
+    const visibleUsers = onlineUsers.filter(u => u.status !== 'offline' && u.status !== 'invisible');
+    document.getElementById('onlineCount').textContent = visibleUsers.length;
+    
+    onlineUsers.forEach(u => {
+      // Hide invisible users for others
+      if (u.status === 'offline' && u.username !== myUsername) {
+        // Just show them offline
+      }
+      
+      const li = document.createElement('li');
+      li.className = 'user-item';
+      li.onclick = () => startDM(u.username);
+      
+      const statusCls = u.status === 'online' ? 'online' : u.status === 'idle' ? 'idle' : u.status === 'dnd' ? 'dnd' : 'offline';
+      
+      li.innerHTML = `
+        <span class="u-avatar">${u.avatar}</span>
+        <div class="u-info">
+          <span class="u-name">${u.username}</span>
+          ${u.custom_status ? `<span class="u-custom-status">${escapeHtml(u.custom_status)}</span>` : ''}
+        </div>
+        <span class="u-status ${statusCls}"></span>
+      `;
+      list.appendChild(li);
+    });
+    
+    // Redraw list to match avatars/presence
+    if (currentView === 'server') loadRooms();
+    else loadDMsList();
+  } catch(e) {}
+}
+
+// ── Switch Rooms ──
+function switchRoom(name) {
+  currentRoom = name;
+  lastKnownCounts[name] = 0;
+  
+  const isDM = name.startsWith('dm__');
+  const dispName = isDM ? getDMTargetName(name) : name;
+  
+  document.getElementById('topChannelIcon').textContent = isDM ? '👤' : '#';
+  document.getElementById('topChannelName').textContent = dispName;
+  document.getElementById('topChannelDesc').textContent = roomDescriptions[name] || (isDM ? `Direct messages with ${dispName}` : '');
+  document.getElementById('msgInput').placeholder = 'Message ' + (isDM ? '@' : '#') + dispName;
+  
+  if (isDM) {
+    selectView('dm');
+  } else {
+    selectView('server');
+  }
+  
+  loadMessages(true);
+}
+
+// ── Load & Draw Messages ──
+let lastUser = null;
+async function loadMessages(scroll) {
+  try {
+    const data = await api('/api/chat/messages?room=' + currentRoom);
+    const area = document.getElementById('messagesArea');
+    const msgs = data.messages;
+    
+    const isDM = currentRoom.startsWith('dm__');
+    const dispName = isDM ? getDMTargetName(currentRoom) : '#' + currentRoom;
+    
+    let html = `<div class="welcome-splash">
+      <div class="big-hash">${isDM ? '👤' : '#'}</div>
+      <h2>Welcome to ${dispName}!</h2>
+      <p>${roomDescriptions[currentRoom] || (isDM ? `This is the beginning of your direct message history with ${dispName}.` : 'This is the start of this channel.')}</p>
+    </div>`;
+    
+    lastUser = null;
+    msgs.forEach(m => {
+      const reactionsHtml = getReactionsHtml(m.id, m.reactions);
+      const textHtml = renderMessageText(m.msg);
+      
+      if (m.user !== lastUser) {
+        html += `<div class="msg-group" data-msg-id="${m.id}">
+          <div class="msg-avatar">${m.avatar}</div>
+          <div class="msg-body">
+            <div class="msg-header">
+              <span class="msg-user" onclick="startDM('${m.user}')">${m.user}</span>
+              <span class="msg-time">${m.ts}</span>
+            </div>
+            <div class="msg-text">${textHtml}</div>
+            <div class="msg-reactions" id="react-${m.id}">${reactionsHtml}</div>
+          </div>
+          <div class="msg-hover-actions">
+            <span onclick="reactMsg('${m.id}', '👍')">👍</span>
+            <span onclick="reactMsg('${m.id}', '❤️')">❤️</span>
+            <span onclick="reactMsg('${m.id}', '🔥')">🔥</span>
+            <span onclick="reactMsg('${m.id}', '😂')">😂</span>
+          </div>
+        </div>`;
+      } else {
+        html += `<div class="msg-group" data-msg-id="${m.id}" style="padding-left:56px; padding-top:0; padding-bottom:0;">
+          <div class="msg-body">
+            <div class="msg-text">${textHtml}</div>
+            <div class="msg-reactions" id="react-${m.id}">${reactionsHtml}</div>
+          </div>
+          <div class="msg-hover-actions">
+            <span onclick="reactMsg('${m.id}', '👍')">👍</span>
+            <span onclick="reactMsg('${m.id}', '❤️')">❤️</span>
+            <span onclick="reactMsg('${m.id}', '🔥')">🔥</span>
+            <span onclick="reactMsg('${m.id}', '😂')">😂</span>
+          </div>
+        </div>`;
+      }
+      lastUser = m.user;
+    });
+    
+    area.innerHTML = html;
+    if (scroll) {
+      area.scrollTop = area.scrollHeight;
+    }
+  } catch (e) {}
+}
+
+function appendMessage(m) {
+  const area = document.getElementById('messagesArea');
+  const reactionsHtml = getReactionsHtml(m.id, m.reactions);
+  const textHtml = renderMessageText(m.msg);
+  
+  let html = '';
+  if (m.user !== lastUser) {
+    html = `<div class="msg-group new-msg" data-msg-id="${m.id}">
+      <div class="msg-avatar">${m.avatar}</div>
+      <div class="msg-body">
+        <div class="msg-header">
+          <span class="msg-user" onclick="startDM('${m.user}')">${m.user}</span>
+          <span class="msg-time">${m.ts}</span>
+        </div>
+        <div class="msg-text">${textHtml}</div>
+        <div class="msg-reactions" id="react-${m.id}">${reactionsHtml}</div>
+      </div>
+      <div class="msg-hover-actions">
+        <span onclick="reactMsg('${m.id}', '👍')">👍</span>
+        <span onclick="reactMsg('${m.id}', '❤️')">❤️</span>
+        <span onclick="reactMsg('${m.id}', '🔥')">🔥</span>
+        <span onclick="reactMsg('${m.id}', '😂')">😂</span>
+      </div>
+    </div>`;
+  } else {
+    html = `<div class="msg-group new-msg" data-msg-id="${m.id}" style="padding-left:56px; padding-top:0; padding-bottom:0;">
+      <div class="msg-body">
+        <div class="msg-text">${textHtml}</div>
+        <div class="msg-reactions" id="react-${m.id}">${reactionsHtml}</div>
+      </div>
+      <div class="msg-hover-actions">
+        <span onclick="reactMsg('${m.id}', '👍')">👍</span>
+        <span onclick="reactMsg('${m.id}', '❤️')">❤️</span>
+        <span onclick="reactMsg('${m.id}', '🔥')">🔥</span>
+        <span onclick="reactMsg('${m.id}', '😂')">😂</span>
+      </div>
+    </div>`;
+  }
+  lastUser = m.user;
+  
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  area.appendChild(div.firstChild);
+  area.scrollTop = area.scrollHeight;
+  
+  if (m.user !== myUsername) {
+    playReceiveSound();
+  }
+}
+
+function escapeHtml(t) {
   const d = document.createElement('div');
   d.textContent = t;
   return d.innerHTML;
 }
 
-// ── Switch room ──
-function switchRoom(name){
-  currentRoom = name;
-  previousMsgLen = 0;
-  lastKnownCounts[name] = 0;
-  document.getElementById('topRoomName').textContent = name;
-  document.getElementById('topRoomDesc').textContent = roomDescriptions[name]||'';
-  document.getElementById('msgInput').placeholder = 'Message #' + name;
-  loadRooms();
-  loadMessages(true);
+function renderMessageText(text) {
+  const escaped = escapeHtml(text);
+  const imgRegex = /(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp|svg)(?:\?\S+)?)/gi;
+  if (imgRegex.test(text)) {
+    return escaped.replace(imgRegex, (match) => {
+      return `<div class="msg-attachment"><img src="${match}" alt="attachment" onload="scrollToBottom()"/></div>`;
+    });
+  }
+  return escaped;
 }
 
-// ── Send message ──
-async function sendMessage(){
+function scrollToBottom() {
+  const area = document.getElementById('messagesArea');
+  area.scrollTop = area.scrollHeight;
+}
+
+// ── Reactions Renderer & Handler ──
+function getReactionsHtml(msgId, reactions) {
+  if (!reactions) return '';
+  let html = '';
+  Object.entries(reactions).forEach(([emoji, users]) => {
+    if (!users || users.length === 0) return;
+    const isActive = users.includes(myUsername) ? ' active' : '';
+    html += `<span class="reaction-badge${isActive}" onclick="reactMsg('${msgId}', '${emoji}')" title="${users.join(', ')}">
+      ${emoji} <span class="count">${users.length}</span>
+    </span>`;
+  });
+  return html;
+}
+
+function updateReactionsUI(msgId, reactions) {
+  const el = document.getElementById(`react-${msgId}`);
+  if (el) {
+    el.innerHTML = getReactionsHtml(msgId, reactions);
+  }
+}
+
+async function reactMsg(msgId, emoji) {
+  try {
+    await api('/api/chat/react', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({room: currentRoom, msg_id: msgId, emoji: emoji})
+    });
+  } catch(e) {}
+}
+
+// ── Send Message ──
+async function sendMessage() {
   const input = document.getElementById('msgInput');
   const msg = input.value.trim();
-  if(!msg) return;
+  if (!msg) return;
   input.value = '';
-  playClickSound();
-
-  // Show typing indicator
-  const typing = document.getElementById('typingIndicator');
-  typing.innerHTML = '';
-
-  await api('/api/chat/messages', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({room: currentRoom, msg: msg, avatar: myAvatar})
-  });
-  await loadMessages(true);
-
-  // Show bot typing after short delay
-  setTimeout(() => {
-    const bots = ['Alice','Bob','Carol'];
-    const bot = bots[Math.floor(Math.random()*bots.length)];
-    typing.innerHTML = '<span class="typing-dots"><span>●</span><span>●</span><span>●</span></span> ' + bot + ' is typing...';
-    setTimeout(() => { typing.innerHTML = ''; }, 2500);
-  }, 400);
+  
+  try {
+    await api('/api/chat/messages', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({room: currentRoom, msg: msg})
+    });
+  } catch(e) {
+    alert(e.message);
+  }
 }
 
-// ── Avatar selector ──
-document.getElementById('avatarSelect').addEventListener('change', function(){
-  myAvatar = this.value;
-  document.getElementById('myAvatar').textContent = myAvatar;
-  // Notify server
-  api('/api/chat/avatar', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({avatar: myAvatar})
-  });
-});
+function attachImage() {
+  const url = prompt("Enter an image URL to attach:");
+  if (url && url.startsWith('http')) {
+    const input = document.getElementById('msgInput');
+    input.value = (input.value + " " + url).trim();
+    input.focus();
+  }
+}
 
-// ── Input events ──
-document.getElementById('msgInput').addEventListener('keydown', e => {
-  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
-});
-document.getElementById('sendBtn').addEventListener('click', sendMessage);
+// ── Typing Indicator systems ──
+function handleTyping() {
+  if (typingTimeout) clearTimeout(typingTimeout);
+  
+  // Send typing notify to server every 2 seconds
+  if (!typingTimeout) {
+    api('/api/chat/typing', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({room: currentRoom})
+    });
+  }
+  
+  typingTimeout = setTimeout(() => {
+    typingTimeout = null;
+  }, 2000);
+}
 
-// ── Polling ──
-async function poll(){
-  // Check for new messages in current room
-  await loadMessages(true);
-  // Check other rooms for badge counts
-  const roomsData = await api('/api/chat/rooms');
-  roomsData.rooms.forEach(r => {
-    if(r.name !== currentRoom){
-      const prev = lastMsgCount[r.name] || 0;
-      const diff = r.msg_count - prev;
-      if(diff > 0){
-        lastKnownCounts[r.name] = (lastKnownCounts[r.name]||0) + diff;
-      }
+function updateTypingDisplay() {
+  const ind = document.getElementById('typingIndicator');
+  const now = Date.now();
+  
+  // Prune expired typing status
+  const typers = [];
+  Object.entries(activeTypingUsers).forEach(([uname, ts]) => {
+    if (now - ts < 3000) {
+      typers.push(uname);
     }
-    lastMsgCount[r.name] = r.msg_count;
   });
-  loadRooms();
-  loadUsers();
+  
+  if (typers.length === 0) {
+    ind.innerHTML = '';
+  } else if (typers.length === 1) {
+    ind.innerHTML = `<span class="typing-dots"><span>●</span><span>●</span><span>●</span></span> <strong>${typers[0]}</strong> is typing...`;
+  } else if (typers.length === 2) {
+    ind.innerHTML = `<span class="typing-dots"><span>●</span><span>●</span><span>●</span></span> <strong>${typers[0]}</strong> and <strong>${typers[1]}</strong> are typing...`;
+  } else {
+    ind.innerHTML = `<span class="typing-dots"><span>●</span><span>●</span><span>●</span></span> Multiple users are typing...`;
+  }
+}
+
+// Check and update typing indicators periodically
+setInterval(updateTypingDisplay, 1000);
+
+// ── DMs Room Launcher ──
+async function startDM(username) {
+  if (username === myUsername) return;
+  try {
+    const res = await api('/api/chat/dm/room', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({target: username})
+    });
+    
+    // Add description
+    roomDescriptions[res.room_name] = `Direct messages with ${username}`;
+    
+    switchRoom(res.room_name);
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+// ── Voice channels systems ──
+async function joinVoice(roomName) {
+  if (currentVoiceRoom === roomName) return;
+  try {
+    await api('/api/chat/voice/join', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({room: roomName})
+    });
+    currentVoiceRoom = roomName;
+    playVoiceJoinSound();
+    
+    // Draw Voice Panel
+    document.getElementById('voiceRoomName').textContent = roomName;
+    document.getElementById('voicePanel').style.display = 'flex';
+    
+    loadRooms();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function leaveVoice() {
+  if (!currentVoiceRoom) return;
+  try {
+    await api('/api/chat/voice/leave', {method: 'POST'});
+    currentVoiceRoom = null;
+    playVoiceLeaveSound();
+    
+    document.getElementById('voicePanel').style.display = 'none';
+    loadRooms();
+  } catch(e) {}
+}
+
+function toggleMute() {
+  isMuted = !isMuted;
+  const btn = document.getElementById('btnMute');
+  btn.classList.toggle('active', isMuted);
+  playShortBeep(isMuted ? 550 : 650, 0.05);
+}
+
+function toggleDeafen() {
+  isDeafened = !isDeafened;
+  const btn = document.getElementById('btnDeafen');
+  btn.classList.toggle('active', isDeafened);
+  
+  if (isDeafened && !isMuted) {
+    toggleMute();
+  } else if (!isDeafened && isMuted) {
+    toggleMute();
+  }
+  playShortBeep(isDeafened ? 450 : 750, 0.05);
+}
+
+// ── Create Channel ──
+function openChannelModal() {
+  document.getElementById('channelModal').style.display = 'flex';
+}
+function closeChannelModal() {
+  document.getElementById('channelModal').style.display = 'none';
+}
+async function createChannel() {
+  const name = document.getElementById('channelName').value.trim();
+  const type = document.getElementById('channelType').value;
+  const isPrivate = document.getElementById('channelPrivate').checked;
+  if (!name) {
+    alert("Channel name is required");
+    return;
+  }
+  try {
+    await api('/api/chat/rooms', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, type: type, private: isPrivate})
+    });
+    closeChannelModal();
+    document.getElementById('channelName').value = '';
+    document.getElementById('channelPrivate').checked = false;
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+// ── SSE Real-Time Stream Event Listener ──
+function connectSSE() {
+  if (eventSource) {
+    eventSource.close();
+  }
+  eventSource = new EventSource('/api/chat/stream');
+  
+  eventSource.onmessage = function(event) {
+    const pkt = JSON.parse(event.data);
+    if (pkt.event === 'ping') return;
+    
+    const d = pkt.data;
+    if (pkt.event === 'message') {
+      if (d.room === currentRoom) {
+        appendMessage(d.message);
+      } else {
+        lastKnownCounts[d.room] = (lastKnownCounts[d.room] || 0) + 1;
+        if (currentView === 'server') loadRooms();
+        else loadDMsList();
+      }
+    } else if (pkt.event === 'typing') {
+      if (d.room === currentRoom && d.user !== myUsername) {
+        activeTypingUsers[d.user] = Date.now();
+        updateTypingDisplay();
+      }
+    } else if (pkt.event === 'presence') {
+      loadUsers();
+    } else if (pkt.event === 'room_created') {
+      roomDescriptions[d.room.name] = d.description;
+      if (currentView === 'server') loadRooms();
+    } else if (pkt.event === 'reaction') {
+      if (d.room === currentRoom) {
+        updateReactionsUI(d.msg_id, d.reactions);
+      }
+    } else if (pkt.event === 'voice_update') {
+      loadRooms();
+    }
+  };
+  
+  eventSource.onerror = function() {
+    console.log("SSE Connection lost. Reconnecting...");
+    setTimeout(connectSSE, 3000);
+  };
 }
 
 // ── Init ──
-(async function init(){
-  // Snapshot initial counts
-  const roomsData = await api('/api/chat/rooms');
-  roomsData.rooms.forEach(r => { lastMsgCount[r.name] = r.msg_count; });
-  lastKnownCounts = {};
-  await loadRooms();
-  await loadUsers();
-  await loadMessages(true);
-  pollInterval = setInterval(poll, 1500);
-  document.getElementById('msgInput').focus();
-})();
+document.getElementById('msgInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+// Run auth check
+checkAuth();
+
 </script>
 </body>
 </html>
 """
-
-# ── Room descriptions for API ────────────────────────────────
-ROOM_DESCRIPTIONS = {
-    "general": "Welcome to the general chat",
-    "gaming": "Talk about games, find teammates",
-    "random": "Off-topic, memes, and random fun",
-}
 
 # ── Flask Routes ──────────────────────────────────────────────
 
@@ -1155,89 +2224,396 @@ def index():
     return render_template_string(HTML_TEMPLATE)
 
 
-@app.route("/api/chat/rooms")
-def api_rooms():
+@app.route("/api/auth/login", methods=["POST"])
+def api_login():
+    data = request.get_json(silent=True) or {}
+    username = data.get("username", "").strip()
+    password = data.get("password", "").strip()
+    avatar = data.get("avatar", "🐼")
+    
+    if not username:
+        return jsonify({"error": "Username cannot be empty"}), 400
+        
     with chat_lock:
-        rooms = []
-        for name, room in chat_rooms.items():
-            info = room.info()
-            info["description"] = ROOM_DESCRIPTIONS.get(name, "")
-            rooms.append(info)
-    return jsonify({"rooms": rooms})
+        user = global_users.get(username)
+        if user:
+            if password and user.pw_hash:
+                if not user.verify(password):
+                    return jsonify({"error": "Incorrect password"}), 401
+            elif user.pw_hash:
+                return jsonify({"error": "Password required for this user"}), 401
+            
+            user.status = "online"
+            if avatar:
+                user.avatar = avatar
+        else:
+            user = UserProfile(username, password)
+            if avatar:
+                user.avatar = avatar
+            global_users[username] = user
+            
+            # Join general automatically
+            if "general" in chat_rooms:
+                chat_rooms["general"].members.add(username)
+        
+        session["username"] = username
+        
+    broadcast_sse("presence", {
+        "username": username,
+        "avatar": user.avatar,
+        "status": "online",
+        "custom_status": getattr(user, "custom_status", "")
+    })
+    
+    return jsonify({"ok": True, "user": user.info()})
 
 
-@app.route("/api/chat/messages")
-def api_messages():
-    room_name = request.args.get("room", "general")
+@app.route("/api/auth/logout", methods=["POST"])
+def api_logout():
+    username = session.pop("username", None)
+    if username:
+        with chat_lock:
+            user = global_users.get(username)
+            if user:
+                user.status = "offline"
+        broadcast_sse("presence", {
+            "username": username,
+            "status": "offline"
+        })
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/me")
+def api_me():
+    username = session.get("username")
+    if not username:
+        return jsonify({"logged_in": False}), 401
     with chat_lock:
-        room = chat_rooms.get(room_name)
-        if not room:
-            return jsonify({"error": f"Room '{room_name}' not found"}), 404
-        messages = []
-        for ts, user, msg in room.get_recent(50):
-            avatar = "🐼"  # default
-            if user in BOT_PROFILES:
-                avatar = BOT_PROFILES[user].avatar
-            elif user == "You":
-                avatar = web_user["avatar"]
-            messages.append({
-                "ts": ts,
-                "user": user,
-                "msg": msg,
-                "avatar": avatar,
-            })
-    return jsonify({"messages": messages, "room": room_name})
+        user = global_users.get(username)
+        if not user:
+            session.pop("username", None)
+            return jsonify({"logged_in": False}), 401
+        return jsonify({"logged_in": True, "user": user.info()})
 
 
-@app.route("/api/chat/messages", methods=["POST"])
-def api_send_message():
+@app.route("/api/user/settings", methods=["POST"])
+def api_user_settings():
+    username = session.get("username")
+    if not username:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    status = data.get("status")
+    custom_status = data.get("custom_status")
+    avatar = data.get("avatar")
+    
+    with chat_lock:
+        user = global_users.get(username)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        if status in ("online", "idle", "dnd", "offline"):
+            user.status = status
+        if custom_status is not None:
+            user.custom_status = custom_status[:100]
+        if avatar:
+            user.avatar = avatar
+            
+    broadcast_sse("presence", {
+        "username": username,
+        "avatar": user.avatar,
+        "status": user.status,
+        "custom_status": getattr(user, "custom_status", "")
+    })
+    return jsonify({"ok": True, "user": user.info()})
+
+
+@app.route("/api/chat/rooms", methods=["GET", "POST"])
+def api_rooms_route():
+    username = session.get("username")
+    if request.method == "POST":
+        if not username:
+            return jsonify({"error": "Unauthorized"}), 401
+        data = request.get_json(silent=True) or {}
+        room_name = data.get("name", "").strip()
+        is_private = data.get("private", False)
+        room_type = data.get("type", "text")
+        
+        if not room_name:
+            return jsonify({"error": "Channel name cannot be empty"}), 400
+            
+        room_name = "".join(c for c in room_name if c.isalnum() or c in "-_ ")
+        if not room_name:
+            return jsonify({"error": "Invalid channel name"}), 400
+            
+        with chat_lock:
+            if room_name in chat_rooms:
+                return jsonify({"error": f"Channel '{room_name}' already exists"}), 400
+            room = ChatRoom(room_name, username, is_private)
+            room.type = room_type
+            room.members.add(username)
+            chat_rooms[room_name] = room
+            desc = f"Welcome to the {room_name} channel!"
+            if room_type == "voice":
+                desc = f"Simulated voice connection room."
+            ROOM_DESCRIPTIONS[room_name] = desc
+            
+        broadcast_sse("room_created", {
+            "room": room.info(),
+            "description": desc
+        })
+        return jsonify({"ok": True, "room": room.info()})
+        
+    else:
+        with chat_lock:
+            rooms = []
+            for name, room in chat_rooms.items():
+                info = room.info()
+                info["description"] = ROOM_DESCRIPTIONS.get(name, "")
+                
+                # Filter private rooms and DMs
+                if info.get("is_private") or getattr(room, "type", "text") == "dm":
+                    if not username or username not in room.members:
+                        continue
+                rooms.append(info)
+        return jsonify({"rooms": rooms})
+
+
+@app.route("/api/chat/dm/room", methods=["POST"])
+def api_dm_room():
+    username = session.get("username")
+    if not username:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    target = data.get("target")
+    if not target or target not in global_users:
+        return jsonify({"error": "User not found"}), 404
+        
+    room_name = f"dm__{'__'.join(sorted([username, target]))}"
+    with chat_lock:
+        if room_name not in chat_rooms:
+            room = ChatRoom(room_name, "system", is_private=True)
+            room.type = "dm"
+            room.members.update([username, target])
+            chat_rooms[room_name] = room
+            ROOM_DESCRIPTIONS[room_name] = f"Direct Messages with {target}"
+        else:
+            room = chat_rooms[room_name]
+            
+    return jsonify({"ok": True, "room_name": room_name})
+
+
+@app.route("/api/chat/messages", methods=["GET", "POST"])
+def api_messages_route():
+    username = session.get("username")
+    if request.method == "POST":
+        if not username:
+            return jsonify({"error": "Unauthorized"}), 401
+        data = request.get_json(silent=True) or {}
+        room_name = data.get("room", "general")
+        msg = data.get("msg", "").strip()
+        
+        if not msg:
+            return jsonify({"error": "Empty message"}), 400
+            
+        with chat_lock:
+            room = chat_rooms.get(room_name)
+            if not room:
+                return jsonify({"error": f"Room '{room_name}' not found"}), 404
+            if getattr(room, "is_private", False) or getattr(room, "type", "text") == "dm":
+                if username not in room.members:
+                    return jsonify({"error": "Access denied"}), 403
+                    
+            room.add_message(username, msg)
+            if username in global_users:
+                global_users[username].msg_count += 1
+                
+        # Handle bot replies
+        if not room_name.startswith("dm__"):
+            _schedule_bot_reply(room_name)
+        else:
+            bot_target = get_dm_bot_target(room_name, username)
+            if bot_target:
+                _schedule_bot_dm_reply(room_name, bot_target)
+                
+        return jsonify({"ok": True, "room": room_name})
+        
+    else:
+        room_name = request.args.get("room", "general")
+        with chat_lock:
+            room = chat_rooms.get(room_name)
+            if not room:
+                return jsonify({"error": f"Room '{room_name}' not found"}), 404
+            if getattr(room, "is_private", False) or getattr(room, "type", "text") == "dm":
+                if not username or username not in room.members:
+                    return jsonify({"error": "Access denied"}), 403
+            
+            messages = []
+            for e in room.get_recent(50):
+                messages.append({
+                    "id": e["id"],
+                    "ts": e["ts"],
+                    "user": e["user"],
+                    "msg": e["msg"],
+                    "avatar": e.get("avatar", "🐼"),
+                    "reactions": e.get("reactions", {})
+                })
+        return jsonify({"messages": messages, "room": room_name})
+
+
+@app.route("/api/chat/react", methods=["POST"])
+def api_react():
+    username = session.get("username")
+    if not username:
+        return jsonify({"error": "Unauthorized"}), 401
     data = request.get_json(silent=True) or {}
     room_name = data.get("room", "general")
-    msg = data.get("msg", "").strip()
-    avatar = data.get("avatar", "🐼")
-
-    if not msg:
-        return jsonify({"error": "Empty message"}), 400
-
+    msg_id = data.get("msg_id")
+    emoji = data.get("emoji")
+    
+    if not msg_id or not emoji:
+        return jsonify({"error": "Missing parameters"}), 400
+        
     with chat_lock:
         room = chat_rooms.get(room_name)
         if not room:
             return jsonify({"error": f"Room '{room_name}' not found"}), 404
-        web_user["avatar"] = avatar
-        room.add_message("You", msg)
+            
+        msg_found = None
+        for m in room.history:
+            if m["id"] == msg_id:
+                msg_found = m
+                break
+                
+        if not msg_found:
+            return jsonify({"error": "Message not found"}), 404
+            
+        reactions = msg_found.setdefault("reactions", {})
+        user_list = reactions.setdefault(emoji, [])
+        if username in user_list:
+            user_list.remove(username)
+            if not user_list:
+                del reactions[emoji]
+        else:
+            user_list.append(username)
+            
+        broadcast_sse("reaction", {
+            "room": room_name,
+            "msg_id": msg_id,
+            "reactions": reactions
+        })
+        
+    return jsonify({"ok": True})
 
-    # Schedule bot reply
-    _schedule_bot_reply(room_name)
 
-    return jsonify({"ok": True, "room": room_name})
+@app.route("/api/chat/typing", methods=["POST"])
+def api_typing():
+    username = session.get("username")
+    if not username:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    room_name = data.get("room", "general")
+    broadcast_sse("typing", {"room": room_name, "user": username})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/chat/voice/join", methods=["POST"])
+def api_voice_join():
+    username = session.get("username")
+    if not username:
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    room_name = data.get("room")
+    
+    with chat_lock:
+        # Leave previous voice room
+        for rname, room in chat_rooms.items():
+            v_m = getattr(room, "voice_members", set())
+            if username in v_m:
+                v_m.remove(username)
+                broadcast_sse("voice_update", {
+                    "room": rname,
+                    "voice_members": list(v_m),
+                    "user_left": username
+                })
+                
+        room = chat_rooms.get(room_name)
+        if not room or getattr(room, "type", "text") != "voice":
+            return jsonify({"error": "Voice channel not found"}), 404
+            
+        v_m = getattr(room, "voice_members", set())
+        v_m.add(username)
+        room.voice_members = v_m
+        
+    broadcast_sse("voice_update", {
+        "room": room_name,
+        "voice_members": list(v_m),
+        "user_joined": username
+    })
+    return jsonify({"ok": True, "voice_members": list(v_m)})
+
+
+@app.route("/api/chat/voice/leave", methods=["POST"])
+def api_voice_leave():
+    username = session.get("username")
+    if not username:
+        return jsonify({"error": "Unauthorized"}), 401
+        
+    with chat_lock:
+        left_room = None
+        for rname, room in chat_rooms.items():
+            v_m = getattr(room, "voice_members", set())
+            if username in v_m:
+                v_m.remove(username)
+                left_room = rname
+                broadcast_sse("voice_update", {
+                    "room": rname,
+                    "voice_members": list(v_m),
+                    "user_left": username
+                })
+                break
+                
+    return jsonify({"ok": True, "left_room": left_room})
 
 
 @app.route("/api/chat/users")
 def api_users():
     users = []
-    # Web user
-    users.append({
-        "username": web_user["username"],
-        "avatar": web_user["avatar"],
-        "status": "online",
-    })
-    # Bots
-    for name in ["Alice", "Bob", "Carol"]:
-        bot = BOT_PROFILES[name]
-        users.append({
-            "username": bot.username,
-            "avatar": bot.avatar,
-            "status": "online",
-        })
+    with chat_lock:
+        for name, user in global_users.items():
+            users.append(user.info())
     return jsonify({"users": users})
 
 
-@app.route("/api/chat/avatar", methods=["POST"])
-def api_set_avatar():
-    data = request.get_json(silent=True) or {}
-    avatar = data.get("avatar", "🐼")
-    web_user["avatar"] = avatar
-    return jsonify({"ok": True, "avatar": avatar})
+@app.route("/api/chat/stream")
+def api_chat_stream():
+    q = queue.Queue(maxsize=100)
+    with sse_lock:
+        sse_listeners.append(q)
+        
+    def event_generator():
+        try:
+            while True:
+                try:
+                    data = q.get(timeout=15.0)
+                    yield f"data: {data}\n\n"
+                except queue.Empty:
+                    yield f"data: {json.dumps({'event': 'ping'})}\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            with sse_lock:
+                if q in sse_listeners:
+                    sse_listeners.remove(q)
+                    
+    return Response(event_generator(), mimetype="text/event-stream")
+
+
+ROOM_DESCRIPTIONS = {
+    "general": "Welcome to the general chat",
+    "gaming": "Talk about games, find teammates",
+    "random": "Off-topic, memes, and random fun",
+    "Lounge": "Simulated voice connection room.",
+    "Gaming Voice": "Simulated voice connection room."
+}
 
 
 # ══════════════════════════════════════════════════════════════

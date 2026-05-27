@@ -10,6 +10,7 @@ Usage:
 import os
 import sys
 import json
+import uuid
 import webbrowser
 import threading
 
@@ -17,7 +18,7 @@ import threading
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask, render_template_string, request, jsonify, session
-from products import get_all_products, get_product_by_id, get_categories, filter_by_category, search_products, reduce_stock, Product
+from products import get_all_products, get_product_by_id, get_categories, filter_by_category, search_products, reduce_stock, get_reviews, Product
 from cart import ShoppingCart, CartItem
 from payment import PaymentDetails, process_payment, generate_receipt
 
@@ -28,7 +29,10 @@ app.secret_key = "pystore-ecommerce-premium-secret-2026"
 # Session-based shopping carts
 CARTS = {}
 
-def get_cart(session_id):
+def get_cart():
+    if 'session_id' not in session:
+        session['session_id'] = uuid.uuid4().hex
+    session_id = session['session_id']
     if session_id not in CARTS:
         CARTS[session_id] = ShoppingCart()
     return CARTS[session_id]
@@ -182,12 +186,16 @@ HTML_TEMPLATE = r"""
         
         .product-image {
             width: 100%;
-            height: 200px;
-            background: linear-gradient(135deg, var(--accent)20, var(--green)20);
+            min-height: 200px;
+            background: linear-gradient(135deg, rgba(88,166,255,0.2), rgba(63,185,80,0.2));
+            background-size: cover;
+            background-position: center;
             display: flex;
             align-items: center;
             justify-content: center;
+            color: #ffffffcc;
             font-size: 3em;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
         }
         
         .product-info {
@@ -398,15 +406,57 @@ HTML_TEMPLATE = r"""
         </header>
         
         <div class="search-box">
-            <input type="text" id="search-input" placeholder="Search products..." />
+            <input type="text" id="search-input" placeholder="Search products, brands, or categories..." />
             <button onclick="searchProducts()">Search</button>
         </div>
         
-        <div class="categories" id="categories-container"></div>
-        
-        <div id="message-container"></div>
-        
-        <div class="products-grid" id="products-container"></div>
+        <div class="layout">
+            <aside class="sidebar">
+                <div class="filter-panel">
+                    <div class="filter-title">Shop by category</div>
+                    <div id="categories-container" class="filter-list"></div>
+                </div>
+                <div class="filter-panel">
+                    <div class="filter-title">Refine results</div>
+                    <div class="filter-choice" data-group="price">
+                        <div class="filter-label">Price range</div>
+                        <button class="filter-option active" onclick="setPriceRange('all', event)">All</button>
+                        <button class="filter-option" onclick="setPriceRange('under_1000', event)">Under ₹1,000</button>
+                        <button class="filter-option" onclick="setPriceRange('1000_4999', event)">₹1,000–₹4,999</button>
+                        <button class="filter-option" onclick="setPriceRange('5000_14999', event)">₹5,000–₹14,999</button>
+                        <button class="filter-option" onclick="setPriceRange('15000_plus', event)">₹15,000+</button>
+                    </div>
+                    <div class="filter-choice" data-group="rating">
+                        <div class="filter-label">Customer ratings</div>
+                        <button class="filter-option active" onclick="setRating(0, event)">All ratings</button>
+                        <button class="filter-option" onclick="setRating(4, event)">4★ &amp; up</button>
+                        <button class="filter-option" onclick="setRating(3, event)">3★ &amp; up</button>
+                    </div>
+                    <div class="filter-choice">
+                        <div class="filter-label">Availability</div>
+                        <button id="stock-filter" class="filter-option" onclick="toggleInStock(event)">In stock only</button>
+                    </div>
+                </div>
+            </aside>
+            <main class="main-content">
+                <div class="results-header">
+                    <div id="results-summary" class="results-summary">Showing top offers</div>
+                    <div class="sort-row">
+                        <label for="sort-select">Sort by</label>
+                        <select id="sort-select" class="sort-select" onchange="applySortFilter()">
+                            <option value="best">Featured</option>
+                            <option value="price_asc">Price: Low to High</option>
+                            <option value="price_desc">Price: High to Low</option>
+                            <option value="rating_desc">Avg. Customer Review</option>
+                            <option value="newest">Newest Arrivals</option>
+                        </select>
+                        <button class="btn btn-secondary" onclick="clearFilters()">Clear filters</button>
+                    </div>
+                </div>
+                <div id="message-container"></div>
+                <div class="products-grid" id="products-container"></div>
+            </main>
+        </div>
     </div>
     
     <!-- Product Details Modal -->
@@ -459,242 +509,166 @@ HTML_TEMPLATE = r"""
     
     <script>
         let currentCart = null;
-        let selectedCategory = null;
-        
-        function loadProducts(filter = null) {
-            fetch('/api/products' + (filter ? `?category=${filter}` : ''))
-                .then(r => r.json())
-                .then(data => {
-                    const container = document.getElementById('products-container');
-                    container.innerHTML = '';
-                    data.products.forEach(p => {
-                        const card = document.createElement('div');
-                        card.className = 'product-card';
-                        const emoji = ['🎮', '📱', '💻', '🎧', '⌚', '📷', '🎥', '📚'][p.id % 8];
-                        card.innerHTML = `
-                            <div class="product-image">${emoji}</div>
-                            <div class="product-info">
-                                <div class="product-name">${p.name}</div>
-                                <div class="product-category">${p.category}</div>
-                                <div class="product-price">$${p.price.toFixed(2)}</div>
-                                <div class="product-rating">⭐ ${p.rating}</div>
-                                <div class="product-stock ${p.stock > 0 ? 'in-stock' : 'out-of-stock'}">
-                                    ${p.stock > 0 ? `${p.stock} in stock` : 'Out of stock'}
-                                </div>
-                                <div class="product-actions">
-                                    <button class="btn btn-primary" onclick="viewProduct(${p.id})">View</button>
-                                    ${p.stock > 0 ? `<button class="btn btn-secondary" onclick="quickAdd(${p.id})">Add</button>` : ''}
-                                </div>
-                            </div>
-                        `;
-                        container.appendChild(card);
-                    });
-                });
+        let filters = {
+            search: "",
+            category: null,
+            price_range: "all",
+            rating: 0,
+            in_stock: false,
+            sort: "best"
+        };
+
+        function buildQuery() {
+            const params = new URLSearchParams();
+            if (filters.search) params.set('search', filters.search);
+            if (filters.category) params.set('category', filters.category);
+            if (filters.price_range) params.set('price_range', filters.price_range);
+            if (filters.rating) params.set('rating', filters.rating);
+            if (filters.in_stock) params.set('in_stock', '1');
+            if (filters.sort) params.set('sort', filters.sort);
+            return params.toString() ? `?${params.toString()}` : '';
         }
-        
-        function loadCategories() {
-            fetch('/api/categories')
-                .then(r => r.json())
-                .then(data => {
-                    const container = document.getElementById('categories-container');
-                    container.innerHTML = '<button class="category-btn active" onclick="filterCategory(null)">All</button>';
-                    data.categories.forEach(cat => {
-                        const btn = document.createElement('button');
-                        btn.className = 'category-btn';
-                        btn.textContent = cat;
-                        btn.onclick = () => filterCategory(cat);
-                        container.appendChild(btn);
-                    });
-                });
+
+        function updateSummary(count) {
+            const summary = document.getElementById('results-summary');
+            if (count === 0) {
+                summary.textContent = 'No products match your filters';
+            } else {
+                const category = filters.category ? `${filters.category} ` : '';
+                summary.textContent = `Showing ${count} ${category}products`;
+            }
         }
-        
-        function filterCategory(category) {
-            selectedCategory = category;
-            document.querySelectorAll('.category-btn').forEach(btn => btn.classList.remove('active'));
-            event.target.classList.add('active');
-            loadProducts(category);
-        }
-        
-        function viewProduct(productId) {
-            fetch(`/api/product/${productId}`)
-                .then(r => r.json())
-                .then(p => {
-                    const emoji = ['🎮', '📱', '💻', '🎧', '⌚', '📷', '🎥', '📚'][p.id % 8];
-                    document.getElementById('modal-body').innerHTML = `
-                        <div style="text-align: center; font-size: 4em; margin-bottom: 20px;">${emoji}</div>
-                        <h2>${p.name}</h2>
-                        <p style="color: var(--muted); margin-bottom: 16px;">${p.category}</p>
-                        <p style="margin-bottom: 16px;">${p.description}</p>
-                        <div style="font-size: 1.5em; color: var(--yellow); margin-bottom: 16px;">$${p.price.toFixed(2)}</div>
-                        <div style="margin-bottom: 16px;">⭐ ${p.rating} | Stock: ${p.stock}</div>
-                        ${p.stock > 0 ? `
-                            <div class="form-group">
-                                <label>Quantity</label>
-                                <input type="number" id="qty-input" min="1" max="${p.stock}" value="1" />
-                            </div>
-                            <button class="btn btn-primary" style="width: 100%;" onclick="addToCart(${productId})">Add to Cart</button>
-                        ` : '<p style="color: var(--red);">Out of stock</p>'}
-                    `;
-                    document.getElementById('product-modal').classList.add('active');
-                });
-        }
-        
-        function quickAdd(productId) {
-            fetch(`/api/add-to-cart`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({product_id: productId, quantity: 1})
-            }).then(r => r.json()).then(data => {
-                showMessage(data.message, 'success');
-                updateCartCount();
-            });
-        }
-        
-        function addToCart(productId) {
-            const qty = parseInt(document.getElementById('qty-input').value);
-            fetch(`/api/add-to-cart`, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({product_id: productId, quantity: qty})
-            }).then(r => r.json()).then(data => {
-                showMessage(data.message, 'success');
-                closeModal('product-modal');
-                updateCartCount();
-            });
-        }
-        
-        function updateCartCount() {
-            fetch('/api/cart-count')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('cart-count').textContent = data.count;
-                });
-        }
-        
-        function openCart() {
-            fetch('/api/cart')
-                .then(r => r.json())
-                .then(data => {
-                    const container = document.getElementById('cart-container');
-                    if (data.items.length === 0) {
-                        container.innerHTML = '<p style="color: var(--muted);">Your cart is empty</p>';
-                        return;
-                    }
-                    let html = '<div class="cart-container">';
-                    data.items.forEach(item => {
-                        html += `
-                            <div class="cart-item">
-                                <div>
-                                    <div style="font-weight: bold;">${item.product.name}</div>
-                                    <div style="color: var(--muted); font-size: 0.9em;">$${item.product.price.toFixed(2)} × ${item.quantity}</div>
-                                </div>
-                                <div>
-                                    <div style="margin-bottom: 8px; font-weight: bold;">$${item.subtotal.toFixed(2)}</div>
-                                    <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.8em;" onclick="removeFromCart(${item.product.id})">Remove</button>
-                                </div>
-                            </div>
-                        `;
-                    });
-                    html += '</div>';
-                    const summary = data.summary;
-                    html += `
-                        <div class="cart-summary">
-                            <div class="summary-line">
-                                <span>Subtotal:</span>
-                                <span>$${summary.subtotal.toFixed(2)}</span>
-                            </div>
-                            ${summary.discount_amount > 0 ? `<div class="summary-line"><span>Discount:</span><span>-$${summary.discount_amount.toFixed(2)}</span></div>` : ''}
-                            <div class="summary-line">
-                                <span>Shipping:</span>
-                                <span>${summary.shipping === 0 ? 'FREE' : '$' + summary.shipping.toFixed(2)}</span>
-                            </div>
-                            <div class="summary-line">
-                                <span>Tax (8%):</span>
-                                <span>$${summary.tax.toFixed(2)}</span>
-                            </div>
-                            <div class="summary-line summary-total">
-                                <span>Total:</span>
-                                <span>$${summary.total.toFixed(2)}</span>
-                            </div>
-                            <button class="btn btn-primary" style="width: 100%; margin-top: 16px;" onclick="proceedCheckout()">Checkout</button>
-                        </div>
-                    `;
-                    container.innerHTML = html;
-                    document.getElementById('cart-modal').classList.add('active');
-                });
-        }
-        
-        function removeFromCart(productId) {
-            fetch('/api/remove-from-cart', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({product_id: productId})
-            }).then(r => r.json()).then(data => {
-                openCart();
-                updateCartCount();
-            });
-        }
-        
-        function proceedCheckout() {
-            document.getElementById('cart-modal').classList.remove('active');
-            document.getElementById('checkout-modal').classList.add('active');
-        }
-        
-        function submitCheckout(e) {
-            e.preventDefault();
-            const form = document.getElementById('checkout-form');
-            const data = new FormData(form);
-            fetch('/api/checkout', {
-                method: 'POST',
-                body: data
-            }).then(r => r.json()).then(result => {
-                if (result.success) {
-                    showMessage('✅ Payment successful! Transaction ID: ' + result.transaction_id, 'success');
-                    closeModal('checkout-modal');
-                    setTimeout(() => { openCart(); }, 1000);
-                    updateCartCount();
-                } else {
-                    showMessage('❌ ' + result.message, 'error');
-                }
-            });
-        }
-        
-        function searchProducts() {
-            const query = document.getElementById('search-input').value;
-            fetch(`/api/search?q=${query}`)
+
+        function loadProducts() {
+            const query = buildQuery();
+            fetch(`/api/products${query}`)
                 .then(r => r.json())
                 .then(data => {
                     const container = document.getElementById('products-container');
                     container.innerHTML = '';
                     if (data.products.length === 0) {
-                        container.innerHTML = '<p style="color: var(--muted);">No products found</p>';
+                        container.innerHTML = '<p style="color: var(--muted);">No products found. Try changing filters or search terms.</p>';
+                        updateSummary(0);
                         return;
                     }
                     data.products.forEach(p => {
                         const card = document.createElement('div');
                         card.className = 'product-card';
-                        const emoji = ['🎮', '📱', '💻', '🎧', '⌚', '📷', '🎥', '📚'][p.id % 8];
+                        const imageStyle = p.image_url ? `background-image: url('${p.image_url}')` : '';
+                        const fallbackEmoji = ['🎮', '📱', '💻', '🎧', '⌚', '📷', '🎥', '📚'][p.id % 8];
                         card.innerHTML = `
-                            <div class="product-image">${emoji}</div>
+                            <div class="product-image" style="${imageStyle}">${p.image_url ? '' : fallbackEmoji}</div>
                             <div class="product-info">
                                 <div class="product-name">${p.name}</div>
                                 <div class="product-category">${p.category}</div>
-                                <div class="product-price">$${p.price.toFixed(2)}</div>
+                                <div class="product-price">₹${p.price.toFixed(2)}</div>
                                 <div class="product-rating">⭐ ${p.rating}</div>
                                 <div class="product-stock ${p.stock > 0 ? 'in-stock' : 'out-of-stock'}">
                                     ${p.stock > 0 ? `${p.stock} in stock` : 'Out of stock'}
                                 </div>
                                 <div class="product-actions">
-                                    <button class="btn btn-primary" onclick="viewProduct(${p.id})">View</button>
+                                    <button class="btn btn-primary" onclick="window.open('/product/${p.id}', '_blank')">View</button>
                                     ${p.stock > 0 ? `<button class="btn btn-secondary" onclick="quickAdd(${p.id})">Add</button>` : ''}
                                 </div>
                             </div>
                         `;
                         container.appendChild(card);
                     });
+                    updateSummary(data.products.length);
                 });
         }
-        
+
+        function loadCategories() {
+            fetch('/api/categories')
+                .then(r => r.json())
+                .then(data => {
+                    const container = document.getElementById('categories-container');
+                    container.innerHTML = '<button class="category-btn active" onclick="filterCategory(event, null)">All</button>';
+                    data.categories.forEach(cat => {
+                        const btn = document.createElement('button');
+                        btn.className = 'category-btn';
+                        btn.textContent = cat;
+                        btn.onclick = (evt) => filterCategory(evt, cat);
+                        container.appendChild(btn);
+                    });
+                });
+        }
+
+        function filterCategory(event, category) {
+            filters.category = category;
+            document.querySelectorAll('.category-btn').forEach(btn => btn.classList.remove('active'));
+            if (event && event.currentTarget) {
+                event.currentTarget.classList.add('active');
+            } else if (event && event.target) {
+                event.target.classList.add('active');
+            }
+            loadProducts();
+        }
+
+        function setPriceRange(range, event) {
+            filters.price_range = range;
+            document.querySelectorAll('.filter-choice[data-group="price"] .filter-option').forEach(btn => btn.classList.remove('active'));
+            if (event && event.currentTarget) {
+                event.currentTarget.classList.add('active');
+            }
+            loadProducts();
+        }
+
+        function setRating(minRating, event) {
+            filters.rating = minRating;
+            document.querySelectorAll('.filter-choice[data-group="rating"] .filter-option').forEach(btn => btn.classList.remove('active'));
+            if (event && event.currentTarget) {
+                event.currentTarget.classList.add('active');
+            }
+            loadProducts();
+        }
+
+        function toggleInStock(event) {
+            filters.in_stock = !filters.in_stock;
+            if (event && event.currentTarget) {
+                event.currentTarget.classList.toggle('active', filters.in_stock);
+            }
+            loadProducts();
+        }
+
+        function applySortFilter() {
+            filters.sort = document.getElementById('sort-select').value;
+            loadProducts();
+        }
+
+        function searchProducts() {
+            filters.search = document.getElementById('search-input').value.trim();
+            loadProducts();
+        }
+
+        function clearFilters() {
+            filters = {
+                search: "",
+                category: null,
+                price_range: "all",
+                rating: 0,
+                in_stock: false,
+                sort: "best"
+            };
+            document.getElementById('search-input').value = '';
+            const categoryButtons = document.querySelectorAll('.category-btn');
+            categoryButtons.forEach((btn, index) => {
+                btn.classList.toggle('active', index === 0);
+            });
+            document.querySelectorAll('.filter-choice[data-group="price"] .filter-option').forEach((btn, index) => {
+                btn.classList.toggle('active', index === 0);
+            });
+            document.querySelectorAll('.filter-choice[data-group="rating"] .filter-option').forEach((btn, index) => {
+                btn.classList.toggle('active', index === 0);
+            });
+            const stockFilter = document.getElementById('stock-filter');
+            if (stockFilter) {
+                stockFilter.classList.remove('active');
+            }
+            document.getElementById('sort-select').value = 'best';
+            loadProducts();
+        }
+
         function showMessage(msg, type) {
             const container = document.getElementById('message-container');
             container.innerHTML = `<div class="message ${type}">${msg}</div>`;
@@ -709,6 +683,125 @@ HTML_TEMPLATE = r"""
         loadProducts();
         loadCategories();
         updateCartCount();
+    </script>
+</body>
+</html>
+"""
+
+DETAIL_TEMPLATE = r"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ product.name }} - PyStore</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --card: rgba(22, 27, 34, 0.95);
+            --border: rgba(255, 255, 255, 0.08);
+            --accent: #58a6ff;
+            --green: #3fb950;
+            --yellow: #d29922;
+            --text: #c9d1d9;
+            --muted: #8b949e;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            min-height: 100vh;
+            padding: 24px;
+        }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .page { max-width: 1120px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+        .breadcrumb { color: var(--muted); font-size: 0.95em; }
+        .grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 28px; }
+        .product-panel, .details-panel { background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 26px; }
+        .hero-image { width: 100%; min-height: 360px; border-radius: 18px; background: var(--border); background-size: cover; background-position: center; margin-bottom: 20px; }
+        .title { font-size: 2.4rem; margin-bottom: 8px; }
+        .meta { color: var(--muted); margin-bottom: 18px; }
+        .price { font-size: 2rem; font-weight: bold; color: var(--yellow); margin-bottom: 12px; }
+        .badge { display: inline-flex; gap: 8px; align-items: center; padding: 10px 14px; border-radius: 999px; border: 1px solid var(--border); background: rgba(255,255,255,0.04); color: var(--text); font-size: 0.92em; margin-right: 10px; }
+        .rating { font-size: 1rem; color: var(--text); margin-bottom: 16px; }
+        .description { line-height: 1.75; margin-bottom: 20px; }
+        .btn-primary { display: inline-flex; align-items: center; gap: 10px; padding: 14px 24px; background: var(--accent); color: white; border: none; border-radius: 14px; cursor: pointer; font-weight: bold; transition: 0.25s; }
+        .btn-primary:hover { background: var(--green); }
+        .section-title { font-size: 1.1rem; margin-bottom: 14px; letter-spacing: 0.04em; color: var(--text); }
+        .review { border-top: 1px solid rgba(255,255,255,0.08); padding: 18px 0; }
+        .review:first-child { border-top: none; }
+        .review-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .review-author { color: var(--muted); font-size: 0.95em; }
+        .review-comment { line-height: 1.7; color: var(--text); }
+        .info-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+        .info-card { flex: 1; min-width: 140px; border-radius: 16px; border: 1px solid var(--border); background: rgba(255,255,255,0.03); padding: 18px; }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <div class="header">
+            <div>
+                <div class="breadcrumb"><a href="/">Home</a> / {{ product.category }} / {{ product.name }}</div>
+                <h1 class="title">{{ product.name }}</h1>
+            </div>
+            <a class="btn-primary" href="/">Back to Store</a>
+        </div>
+        <div class="grid">
+            <section class="product-panel">
+                <div class="hero-image" style="background-image: url('{{ product.image_url }}');"></div>
+                <div class="meta">{{ product.category }} · {{ product.stock }} in stock · Rating {{ product.rating }} ★</div>
+                <div class="price">₹{{ product.price }}</div>
+                <div class="info-row">
+                    <div class="info-card"><strong>{{ product.stock }}</strong><br/>Units available</div>
+                    <div class="info-card"><strong>{{ reviews | length }}</strong><br/>Customer reviews</div>
+                    <div class="info-card"><strong>{{ product.rating }}</strong><br/>Average rating</div>
+                </div>
+                <div class="description">{{ product.description }}</div>
+                <div class="form-group">
+                    <label for="qty">Quantity</label>
+                    <input id="qty" type="number" min="1" max="{{ product.stock }}" value="1" style="width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text);" />
+                </div>
+                <button class="btn-primary" onclick="addToCart({{ product.id }})">Add to Cart</button>
+                <div id="message-container" style="margin-top: 18px;"></div>
+            </section>
+            <aside class="details-panel">
+                <div class="section-title">Product Overview</div>
+                <p class="description">{{ product.description }}</p>
+                <div class="section-title">Customer reviews</div>
+                {% if reviews %}
+                    {% for review in reviews %}
+                        <div class="review">
+                            <div class="review-title">
+                                <strong>{{ review.title }}</strong>
+                                <span>{{ review.rating }} ★</span>
+                            </div>
+                            <div class="review-author">{{ review.author }}</div>
+                            <p class="review-comment">{{ review.comment }}</p>
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <p style="color: var(--muted);">No reviews yet. Be the first to review this product.</p>
+                {% endif %}
+            </aside>
+        </div>
+    </div>
+    <script>
+        function addToCart(productId) {
+            const qty = parseInt(document.getElementById('qty').value, 10) || 1;
+            fetch('/api/add-to-cart', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({product_id: productId, quantity: qty})
+            })
+            .then(r => r.json())
+            .then(data => {
+                const container = document.getElementById('message-container');
+                container.innerHTML = `<div style="padding: 12px; border-radius: 10px; background: ${data.success ? 'rgba(63,185,80,0.15)' : 'rgba(248,81,73,0.15)'}; color: ${data.success ? '#3fb950' : '#f85149'};">${data.message}</div>`;
+            });
+        }
     </script>
 </body>
 </html>
@@ -734,16 +827,88 @@ console = Console()
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/product/<int:product_id>')
+def product_detail(product_id):
+    p = get_product_by_id(product_id)
+    if not p:
+        return render_template_string("<h1>Product not found</h1><p><a href='/'>Back to store</a></p>"), 404
+    reviews = get_reviews(product_id)
+    return render_template_string(DETAIL_TEMPLATE, product={
+        'id': p.id,
+        'name': p.name,
+        'price': f"{p.price:,.2f}",
+        'category': p.category,
+        'stock': p.stock,
+        'rating': p.rating,
+        'description': p.description,
+        'image_url': p.image_url or 'https://images.unsplash.com/photo-1513708923556-7dc0fcf2f98c?w=900&q=80',
+    }, reviews=reviews)
+
 @app.route('/api/products')
 def api_products():
-    category = request.args.get('category')
+    category = request.args.get('category', '').strip()
+    search_term = request.args.get('search', '').strip()
+    price_range = request.args.get('price_range', 'all')
+    min_price = request.args.get('min_price')
+    max_price = request.args.get('max_price')
+    rating = request.args.get('rating')
+    in_stock = request.args.get('in_stock', '0')
+    sort = request.args.get('sort', 'best')
+
     if category:
         products = filter_by_category(category)
     else:
         products = get_all_products()
+
+    if search_term:
+        search_results = search_products(search_term)
+        products = [p for p in products if p in search_results]
+
+    if price_range != 'all':
+        if price_range == 'under_1000':
+            min_price, max_price = 0, 999
+        elif price_range == '1000_4999':
+            min_price, max_price = 1000, 4999
+        elif price_range == '5000_14999':
+            min_price, max_price = 5000, 14999
+        elif price_range == '15000_plus':
+            min_price, max_price = 15000, None
+
+    try:
+        if min_price is not None and min_price != '':
+            min_value = float(min_price)
+            products = [p for p in products if p.price >= min_value]
+        if max_price is not None and max_price != '':
+            max_value = float(max_price)
+            products = [p for p in products if p.price <= max_value]
+    except ValueError:
+        pass
+
+    if rating:
+        try:
+            min_rating = float(rating)
+            products = [p for p in products if p.rating >= min_rating]
+        except ValueError:
+            pass
+
+    if in_stock == '1':
+        products = [p for p in products if p.stock > 0]
+
+    if sort == 'price_asc':
+        products = sorted(products, key=lambda p: p.price)
+    elif sort == 'price_desc':
+        products = sorted(products, key=lambda p: p.price, reverse=True)
+    elif sort == 'rating_desc':
+        products = sorted(products, key=lambda p: p.rating, reverse=True)
+    elif sort == 'newest':
+        products = sorted(products, key=lambda p: p.id, reverse=True)
+    else:
+        products = sorted(products, key=lambda p: (p.rating, p.stock), reverse=True)
+
     return jsonify({"products": [
-        {"id": p.id, "name": p.name, "price": p.price, "category": p.category, 
-         "stock": p.stock, "rating": p.rating, "description": p.description}
+        {"id": p.id, "name": p.name, "price": p.price, "category": p.category,
+         "stock": p.stock, "rating": p.rating, "description": p.description,
+         "image_url": p.image_url}
         for p in products
     ]})
 
@@ -753,7 +918,8 @@ def api_product(product_id):
     if not p:
         return jsonify({"error": "Not found"}), 404
     return jsonify({"id": p.id, "name": p.name, "price": p.price, "category": p.category,
-                    "stock": p.stock, "rating": p.rating, "description": p.description})
+                    "stock": p.stock, "rating": p.rating, "description": p.description,
+                    "image_url": p.image_url})
 
 @app.route('/api/categories')
 def api_categories():
@@ -762,22 +928,24 @@ def api_categories():
 @app.route('/api/add-to-cart', methods=['POST'])
 def api_add_to_cart():
     data = request.json
-    cart = get_cart(session.get('session_id', 'default'))
+    cart = get_cart()
     msg = cart.add_item(data['product_id'], data.get('quantity', 1))
-    return jsonify({"message": msg, "success": True})
+    success = not any(keyword in msg.lower() for keyword in ["not found", "out of stock", "only"])
+    return jsonify({"message": msg, "success": success})
 
 @app.route('/api/remove-from-cart', methods=['POST'])
 def api_remove_from_cart():
     data = request.json
-    cart = get_cart(session.get('session_id', 'default'))
-    cart.remove_item(data['product_id'])
-    return jsonify({"success": True})
+    cart = get_cart()
+    msg = cart.remove_item(data['product_id'])
+    return jsonify({"success": True, "message": msg})
 
 @app.route('/api/cart')
 def api_cart():
-    cart = get_cart(session.get('session_id', 'default'))
+    cart = get_cart()
     items = [
-        {"product": {"id": item.product.id, "name": item.product.name, "price": item.product.price},
+        {"product": {"id": item.product.id, "name": item.product.name,
+                      "price": item.product.price, "image_url": item.product.image_url},
          "quantity": item.quantity, "subtotal": item.subtotal}
         for item in cart.items()
     ]
@@ -785,7 +953,7 @@ def api_cart():
 
 @app.route('/api/cart-count')
 def api_cart_count():
-    cart = get_cart(session.get('session_id', 'default'))
+    cart = get_cart()
     return jsonify({"count": sum(item.quantity for item in cart.items())})
 
 @app.route('/api/search')
@@ -794,7 +962,8 @@ def api_search():
     products = search_products(query)
     return jsonify({"products": [
         {"id": p.id, "name": p.name, "price": p.price, "category": p.category,
-         "stock": p.stock, "rating": p.rating, "description": p.description}
+         "stock": p.stock, "rating": p.rating, "description": p.description,
+         "image_url": p.image_url}
         for p in products
     ]})
 

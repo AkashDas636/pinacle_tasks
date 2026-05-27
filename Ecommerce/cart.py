@@ -1,5 +1,5 @@
 # ============================================================
-#  cart.py  –  Shopping cart logic
+#  cart.py  –  Shopping cart logic (Indian Market - GST)
 # ============================================================
 from dataclasses import dataclass, field
 from products import Product, get_product_by_id
@@ -16,14 +16,14 @@ class CartItem:
 
 
 class ShoppingCart:
-    TAX_RATE      = 0.08   # 8 %
-    SHIPPING_FREE = 50.00  # free shipping above this subtotal
-    SHIPPING_FLAT = 5.99
+    TAX_RATE      = 0.18    # 18% GST (India)
+    SHIPPING_FREE = 999.00  # Free shipping above ₹999
+    SHIPPING_FLAT = 99.00   # Flat ₹99 shipping
 
     def __init__(self):
-        self._items: dict[int, CartItem] = {}   # product_id → CartItem
+        self._items: dict[int, CartItem] = {}   # product_id -> CartItem
         self.coupon_code:  str   = ""
-        self.discount_pct: float = 0.0           # e.g. 0.10 = 10 %
+        self.discount_pct: float = 0.0           # e.g. 0.10 = 10%
 
     # ── mutation ─────────────────────────────────────────────
 
@@ -42,13 +42,13 @@ class ShoppingCart:
             self._items[product_id].quantity += qty
         else:
             self._items[product_id] = CartItem(product, qty)
-        return f"✓ Added {qty}× '{product.name}' to cart."
+        return f"Added {qty}x '{product.name}' to cart."
 
     def remove_item(self, product_id: int) -> str:
         if product_id not in self._items:
             return "Item not in cart."
         name = self._items.pop(product_id).product.name
-        return f"✓ Removed '{name}' from cart."
+        return f"Removed '{name}' from cart."
 
     def update_quantity(self, product_id: int, qty: int) -> str:
         if qty <= 0:
@@ -59,7 +59,7 @@ class ShoppingCart:
         if qty > product.stock:
             return f"Only {product.stock} unit(s) available."
         self._items[product_id].quantity = qty
-        return f"✓ Updated '{product.name}' quantity to {qty}."
+        return f"Updated '{product.name}' quantity to {qty}."
 
     def clear(self):
         self._items.clear()
@@ -68,18 +68,20 @@ class ShoppingCart:
 
     def apply_coupon(self, code: str) -> str:
         coupons = {
-            "SAVE10": 0.10,
-            "SAVE20": 0.20,
-            "TECH15": 0.15,
+            "SAVE10":   0.10,
+            "SAVE20":   0.20,
+            "TECH15":   0.15,
             "WELCOME5": 0.05,
+            "DIWALI25": 0.25,
+            "FIRST10":  0.10,
         }
         code = code.upper().strip()
         if code in coupons:
             self.coupon_code  = code
             self.discount_pct = coupons[code]
             pct = int(self.discount_pct * 100)
-            return f"✓ Coupon '{code}' applied – {pct}% off!"
-        return f"✗ Coupon '{code}' is not valid."
+            return f"Coupon '{code}' applied - {pct}% off!"
+        return f"Coupon '{code}' is not valid."
 
     # ── read-only accessors ──────────────────────────────────
 
