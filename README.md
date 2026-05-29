@@ -40,7 +40,7 @@ A comprehensive collection of 8 feature-rich Python applications with modern web
    python quiz_platform.py            # Port 5004
    python 2_chat_app.py               # Port 5005
    python blog_site.py                # Port 5000
-   python Ecommerce/ecommerce_display.py  # Port 5006
+   python Ecommerce/app.py            # Port 5006
    python "Waether app/weather_app.py"    # Port 5007
    python calendar_reminder.py        # Port 8080
    ```
@@ -100,7 +100,7 @@ Pinacle/
 ├── .gitignore                 # Git ignore file
 ├── README.md                  # This file
 ├── Ecommerce/                 # E-commerce module
-│   ├── ecommerce_display.py   # Storefront UI
+│   ├── app.py                 # Amazon-inspired store entrypoint
 │   ├── products.py            # Product catalog
 │   ├── cart.py                # Shopping cart logic
 │   └── payment.py             # Payment processing

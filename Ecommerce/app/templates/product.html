@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ product.name }} | PyStore{% endblock %}
+{% block content %}
+<main class="page-container">
+  <section class="product-detail">
+    <img src="{{ product.image }}" alt="{{ product.name }}">
+    <div>
+      <h1>{{ product.name }}</h1>
+      <p>{{ product.description }}</p>
+      <p>{{ product.rating }} ★ | {{ product.category }}</p>
+      <p>
+        <strong>₹{{ '%.0f'|format(product.price) }}</strong>
+        <span class="mrp">₹{{ '%.0f'|format(product.mrp) }}</span>
+        <span class="discount">-{{ product.discount }}%</span>
+      </p>
+      {% if current_user.is_authenticated %}
+      <div class="btn-row">
+        <button onclick="addToCart({{ product.id }})">Add to Cart</button>
+        <button class="secondary" onclick="toggleWishlist({{ product.id }})">Wishlist</button>
+      </div>
+      {% else %}
+      <a class="login-prompt" href="{{ url_for('auth.login_page') }}">Sign in to purchase</a>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h3>Customer Reviews</h3>
+    {% for r in reviews %}
+    <div class="review">
+      <strong>{{ r.title }}</strong>
+      <p>{{ r.rating }} ★ by {{ r.user.name }}</p>
+      <p>{{ r.comment }}</p>
+    </div>
+    {% else %}
+    <p>No reviews yet.</p>
+    {% endfor %}
+
+    {% if current_user.is_authenticated %}
+    <form method="post" action="{{ url_for('web.add_review', product_id=product.id) }}" class="review-form">
+      <input name="title" placeholder="Review title" required>
+      <input name="rating" type="number" min="1" max="5" step="0.1" required>
+      <textarea name="comment" placeholder="Write your review" required></textarea>
+      <button type="submit">Submit Review</button>
+    </form>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}

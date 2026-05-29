@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Checkout | PyStore{% endblock %}
+{% block content %}
+<main class="page-container panel">
+  <h1>Checkout</h1>
+  {% if addresses %}
+  <form id="checkoutForm" class="stacked-form">
+    <label>Select Address</label>
+    <select name="address_id" required>
+      {% for a in addresses %}
+      <option value="{{ a.id }}">{{ a.full_name }} | {{ a.line1 }}, {{ a.city }} ({{ a.pin }})</option>
+      {% endfor %}
+    </select>
+    <label>Coupon Code (optional)</label>
+    <input name="coupon_code" placeholder="WELCOME10">
+    <button type="submit">Place Order</button>
+  </form>
+  {% else %}
+  <p>You need at least one address before checkout.</p>
+  <a class="cta-btn" href="{{ url_for('web.addresses_page') }}">Add Address</a>
+  {% endif %}
+
+  <div class="summary">
+    <p>Subtotal: ₹{{ '%.0f'|format(summary.subtotal) }}</p>
+    <p>Discount: ₹{{ '%.0f'|format(summary.discount) }}</p>
+    <p>Shipping: ₹{{ '%.0f'|format(summary.shipping) }}</p>
+    <p>Tax: ₹{{ '%.0f'|format(summary.tax) }}</p>
+    <h3>Total: ₹{{ '%.0f'|format(summary.total) }}</h3>
+  </div>
+</main>
+{% endblock %}
+{% block scripts %}
+<script>
+const form = document.getElementById("checkoutForm");
+if (form) {
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(form).entries());
+    const res = await fetch("/api/checkout", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(data)
+    });
+    const out = await res.json();
+    if (!out.success) {
+      alert(out.message);
+      return;
+    }
+    window.location.href = "/orders";
+  });
+}
+</script>
+{% endblock %}

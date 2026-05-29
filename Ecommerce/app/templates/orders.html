@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Orders | PyStore{% endblock %}
+{% block content %}
+<main class="page-container panel">
+  <h1>Your Orders</h1>
+  {% for o in orders %}
+  <div class="order-card">
+    <div>
+      <strong>{{ o.order_code }}</strong>
+      <p>{{ o.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+    </div>
+    <div>
+      <p>Status: <strong>{{ o.status }}</strong></p>
+      <p>Total: <strong>₹{{ '%.0f'|format(o.total) }}</strong></p>
+    </div>
+  </div>
+  {% else %}
+  <p>No orders yet.</p>
+  {% endfor %}
+</main>
+{% endblock %}

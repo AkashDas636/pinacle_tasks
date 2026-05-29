@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Admin Orders{% endblock %}
+{% block content %}
+<main class="page-container panel">
+  <h1>Manage Orders</h1>
+  <table class="table">
+    <thead><tr><th>Code</th><th>User</th><th>Total</th><th>Status</th><th>Action</th></tr></thead>
+    <tbody>
+      {% for o in orders %}
+      <tr>
+        <td>{{ o.order_code }}</td>
+        <td>{{ o.user.email }}</td>
+        <td>₹{{ '%.0f'|format(o.total) }}</td>
+        <td>{{ o.status }}</td>
+        <td>
+          <form method="post" action="{{ url_for('admin.update_order_status', order_id=o.id) }}">
+            <select name="status">
+              {% for status in ['Placed','Packed','Shipped','Delivered','Cancelled'] %}
+              <option value="{{ status }}" {% if o.status == status %}selected{% endif %}>{{ status }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit">Update</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</main>
+{% endblock %}

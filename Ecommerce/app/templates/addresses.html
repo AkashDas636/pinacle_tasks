@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Addresses | PyStore{% endblock %}
+{% block content %}
+<main class="page-container panel">
+  <h1>Your Addresses</h1>
+  <div class="address-grid">
+    {% for a in addresses %}
+    <div class="address-card">
+      <strong>{{ a.full_name }}</strong>
+      <p>{{ a.line1 }}</p>
+      <p>{{ a.city }}, {{ a.state }} - {{ a.pin }}</p>
+      <p>{{ a.phone }}</p>
+      {% if a.is_default %}<span class="tag">Default</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <h2>Add New Address</h2>
+  <form method="post" class="stacked-form">
+    <input name="full_name" placeholder="Full name" required>
+    <input name="phone" placeholder="Phone" required>
+    <input name="line1" placeholder="Address line" required>
+    <input name="city" placeholder="City" required>
+    <input name="state" placeholder="State" required>
+    <input name="pin" placeholder="PIN code" required>
+    <label><input type="checkbox" name="is_default" value="1"> Make default</label>
+    <button type="submit">Save Address</button>
+  </form>
+</main>
+{% endblock %}

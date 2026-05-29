@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard{% endblock %}
+{% block content %}
+<main class="page-container panel">
+  <h1>Admin Dashboard</h1>
+  <div class="stats-grid">
+    <div class="stat-card"><h4>Users</h4><p>{{ stats.users }}</p></div>
+    <div class="stat-card"><h4>Products</h4><p>{{ stats.products }}</p></div>
+    <div class="stat-card"><h4>Orders</h4><p>{{ stats.orders }}</p></div>
+    <div class="stat-card"><h4>Revenue</h4><p>₹{{ '%.0f'|format(stats.revenue) }}</p></div>
+  </div>
+  <div class="btn-row">
+    <a class="cta-btn" href="{{ url_for('admin.products') }}">Manage Products</a>
+    <a class="cta-btn" href="{{ url_for('admin.orders') }}">Manage Orders</a>
+  </div>
+</main>
+{% endblock %}

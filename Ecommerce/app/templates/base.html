@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}PyStore{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+  {% include "components/navbar.html" %}
+  {% include "components/flash.html" %}
+  {% block content %}{% endblock %}
+  <footer class="footer">
+    <div class="footer-top">Back to top</div>
+    <div class="footer-grid">
+      <div><h4>Get to Know Us</h4><p>About</p><p>Careers</p><p>Press Releases</p></div>
+      <div><h4>Connect with Us</h4><p>Instagram</p><p>Twitter</p><p>Facebook</p></div>
+      <div><h4>Make Money with Us</h4><p>Sell on PyStore</p><p>Affiliate Program</p><p>Advertise Products</p></div>
+      <div><h4>Let Us Help You</h4><p>Your Account</p><p>Returns Centre</p><p>Help</p></div>
+    </div>
+  </footer>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

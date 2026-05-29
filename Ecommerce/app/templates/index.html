@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}PyStore | Online Shopping{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <h1>Welcome to India's shopping destination</h1>
+    <p>Amazon-style experience with fast search, deals, checkout and order tracking.</p>
+  </div>
+</section>
+
+<main class="page-container">
+  <section class="deal-rail">
+    <h2>Today's Deals</h2>
+    <div class="rail-grid">
+      {% for p in deals %}
+      <a class="rail-item" href="{{ url_for('web.product_page', product_id=p.id) }}">
+        <img src="{{ p.image }}" alt="{{ p.name }}">
+        <p>{{ p.name }}</p>
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="layout">
+    <aside class="filter-box">
+      <h3>Filters</h3>
+      <form method="get" action="{{ url_for('web.home') }}">
+        <input type="text" name="q" value="{{ query }}" placeholder="Search keyword">
+        <select name="category">
+          <option value="">All Categories</option>
+          {% for c in categories %}
+          <option value="{{ c }}" {% if category == c %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+        <select name="sort">
+          <option value="featured" {% if sort == 'featured' %}selected{% endif %}>Featured</option>
+          <option value="price_asc" {% if sort == 'price_asc' %}selected{% endif %}>Price low-high</option>
+          <option value="price_desc" {% if sort == 'price_desc' %}selected{% endif %}>Price high-low</option>
+          <option value="rating_desc" {% if sort == 'rating_desc' %}selected{% endif %}>Top rated</option>
+        </select>
+        <button type="submit">Apply</button>
+      </form>
+    </aside>
+
+    <section class="catalog-box">
+      <h2>Products</h2>
+      <div class="product-grid">
+        {% for p in products["items"] %}
+        <article class="product-card">
+          <a href="{{ url_for('web.product_page', product_id=p.id) }}">
+            <img src="{{ p.image }}" alt="{{ p.name }}">
+            <h4>{{ p.name }}</h4>
+          </a>
+          <div class="price-row">
+            <strong>₹{{ '%.0f'|format(p.price) }}</strong>
+            <span class="mrp">₹{{ '%.0f'|format(p.mrp) }}</span>
+            <span class="discount">-{{ p.discount }}%</span>
+          </div>
+          <p class="meta">{{ p.rating }} ★ | {{ p.category }}</p>
+          {% if current_user.is_authenticated %}
+          <div class="btn-row">
+            <button onclick="addToCart({{ p.id }})">Add to Cart</button>
+            <button class="secondary" onclick="toggleWishlist({{ p.id }})">Wishlist</button>
+          </div>
+          {% else %}
+          <a class="login-prompt" href="{{ url_for('auth.login_page') }}">Sign in to buy</a>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+      <div class="pager">
+        {% if products.page > 1 %}
+        <a href="{{ url_for('web.home', page=products.page-1, q=query, category=category, sort=sort) }}">Previous</a>
+        {% endif %}
+        <span>Page {{ products.page }} of {{ products.pages or 1 }}</span>
+        {% if products.page < products.pages %}
+        <a href="{{ url_for('web.home', page=products.page+1, q=query, category=category, sort=sort) }}">Next</a>
+        {% endif %}
+      </div>
+    </section>
+  </section>
+</main>
+{% endblock %}
